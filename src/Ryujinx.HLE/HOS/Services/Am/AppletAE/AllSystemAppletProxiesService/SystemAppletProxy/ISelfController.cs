@@ -1,5 +1,7 @@
 using Ryujinx.Common.Logging;
 using Ryujinx.HLE.HOS.Ipc;
+using Ryujinx.HLE.HOS.Kernel;
+using Ryujinx.HLE.HOS.Kernel.Ipc;
 using Ryujinx.HLE.HOS.Kernel.Threading;
 using Ryujinx.HLE.HOS.Services.Am.AppletAE.AllSystemAppletProxiesService.SystemAppletProxy.Types;
 using Ryujinx.Horizon.Common;
@@ -46,6 +48,33 @@ namespace Ryujinx.HLE.HOS.Services.Am.AppletAE.AllSystemAppletProxiesService.Sys
         {
             _libraryAppletLaunchableEvent = new KEvent(context.Device.System.KernelContext);
             _pid = pid;
+        }
+
+        [CommandCmif(2000)] // Switch 2
+        // GetNx2GraphicsSystemSession() -> handle<move>
+        public ResultCode GetNx2GraphicsSystemSession(ServiceCtx context)
+        {
+            Nx2StubInterface service = new("nn::gsv::INx2GraphicsSystemSession", registerTipc: true);
+
+            service.TrySetServer(Server);
+            Result createSessionResult = context.Device.System.KernelContext.Syscall.CreateSession(out int serverSessionHandle, out int clientSessionHandle, false, 0);
+
+            if (createSessionResult != Result.Success)
+            {
+                Logger.Error?.Print(LogClass.ServiceAm, $"GetNx2GraphicsSystemSession failed to create a session: {createSessionResult}");
+
+                return ResultCode.NotAvailable;
+            }
+
+            Server.AddSessionObj(serverSessionHandle, service);
+
+            // Switch 2 clients describe this as a raw session output; accept either
+            // HIPC handle attribute until the SDK's copy/move mode is confirmed.
+            context.Response.HandleDesc = new IpcHandleDesc([clientSessionHandle], [clientSessionHandle]);
+
+            Logger.Stub?.PrintStub(LogClass.ServiceAm, new { serverSessionHandle, clientSessionHandle });
+
+            return ResultCode.Success;
         }
 
         [CommandCmif(0)]

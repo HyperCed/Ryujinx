@@ -39,6 +39,35 @@ namespace ARMeilleure.Instructions
         public static void Ldxp(ArmEmitterContext context) => EmitLdp(context, AccessType.Exclusive);
         public static void Ldaxp(ArmEmitterContext context) => EmitLdp(context, AccessType.OrderedEx);
 
+        public static void Lduminal(ArmEmitterContext context)
+        {
+            OpCodeMemEx op = (OpCodeMemEx)context.CurrOp;
+            Operand address = context.Copy(GetIntOrSP(context, op.Rn));
+            Operand value = GetIntOrZR(context, op.Rs);
+
+            if (op.Size == 2)
+            {
+                value = context.ConvertI64ToI32(value);
+            }
+
+            // LDUMINAL has acquire and release semantics. Implement the update with
+            // an atomic compare-and-swap loop on hosts without a matching IR op.
+            EmitBarrier(context);
+
+            Operand physAddr = InstEmitMemoryHelper.EmitPtPointerLoad(context, address, default, write: true, size: 2);
+            Operand retry = Label();
+            Operand zero = Const(0);
+
+            context.MarkLabel(retry);
+            Operand current = context.CompareAndSwap(physAddr, zero, zero);
+            Operand newValue = context.ConditionalSelect(context.ICompareLessUI(current, value), current, value);
+            Operand observed = context.CompareAndSwap(physAddr, current, newValue);
+            context.BranchIfTrue(retry, context.ICompareNotEqual(observed, current));
+
+            SetIntOrZR(context, op.Rt, current);
+            EmitBarrier(context);
+        }
+
         private static void EmitLdr(ArmEmitterContext context, AccessType accType)
         {
             EmitLoadEx(context, accType, pair: false);

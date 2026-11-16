@@ -55,7 +55,7 @@ namespace Ryujinx.HLE
         public IHostUIHandler UIHandler { get; }
         public Debugger.Debugger Debugger { get; }
 
-        public int CpuCoresCount = 4; // Switch has a quad-core Tegra X1 SoC
+        public int CpuCoresCount = 6;
 
         public VSyncMode VSyncMode { get; set; }
         public bool CustomVSyncIntervalEnabled { get; set; }

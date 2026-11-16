@@ -12,6 +12,7 @@ using LibHac.Spl;
 using LibHac.Tools.Es;
 using LibHac.Tools.Fs;
 using LibHac.Tools.FsSystem;
+using LibHac.Tools.FsSystem.RomFs;
 using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Logging;
 using Ryujinx.HLE.HOS;
@@ -20,6 +21,7 @@ using System.Buffers.Text;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using Path = System.IO.Path;
 
@@ -36,7 +38,7 @@ namespace Ryujinx.HLE.FileSystem
         public SdmmcApi SdCard { get; private set; }
         public ModLoader ModLoader { get; private set; }
 
-        private readonly ConcurrentDictionary<ulong, Stream> _romFsByPid;
+        private readonly ConcurrentDictionary<ulong, RomFsEntry> _romFsByPid;
 
         private static bool _isInitialized = false;
 
@@ -56,34 +58,80 @@ namespace Ryujinx.HLE.FileSystem
         {
             ReloadKeySet();
             ModLoader = new ModLoader(); // Should only be created once
-            _romFsByPid = new ConcurrentDictionary<ulong, Stream>();
+            _romFsByPid = new ConcurrentDictionary<ulong, RomFsEntry>();
         }
 
         public void LoadRomFs(ulong pid, string fileName)
         {
-            FileStream romfsStream = new(fileName, FileMode.Open, FileAccess.Read);
-
-            _romFsByPid.AddOrUpdate(pid, romfsStream, (pid, oldStream) =>
+            if (Directory.Exists(fileName))
             {
-                oldStream.Close();
+                LocalFileSystem romFsFileSystem = new(fileName);
 
-                return romfsStream;
-            });
+                try
+                {
+                    RomFsBuilder builder = new();
+
+                    foreach (DirectoryEntryEx entry in romFsFileSystem.EnumerateEntries()
+                                 .Where(entry => entry.Type == DirectoryEntryType.File)
+                                 .OrderBy(entry => entry.FullPath, StringComparer.Ordinal))
+                    {
+                        builder.AddFile(entry.FullPath, new Ryujinx.HLE.HOS.Services.Fs.FileSystemProxy.LazyFile(entry.FullPath, fileName, romFsFileSystem));
+                    }
+
+                    Stream romFsStream = builder.Build().AsStream(FileAccess.Read);
+                    SetRomFs(pid, romFsStream, romFsFileSystem);
+                }
+                catch
+                {
+                    romFsFileSystem.Dispose();
+                    throw;
+                }
+            }
+            else
+            {
+                SetRomFs(pid, new FileStream(fileName, FileMode.Open, FileAccess.Read));
+            }
         }
 
         public void SetRomFs(ulong pid, Stream romfsStream)
         {
-            _romFsByPid.AddOrUpdate(pid, romfsStream, (pid, oldStream) =>
-            {
-                oldStream.Close();
+            SetRomFs(pid, romfsStream, null);
+        }
 
-                return romfsStream;
+        private void SetRomFs(ulong pid, Stream romfsStream, IDisposable owner)
+        {
+            RomFsEntry entry = new(romfsStream, owner);
+
+            _romFsByPid.AddOrUpdate(pid, entry, (pid, oldEntry) =>
+            {
+                oldEntry.Dispose();
+
+                return entry;
             });
         }
 
         public Stream GetRomFs(ulong pid)
         {
-            return _romFsByPid[pid];
+            return _romFsByPid[pid].Stream;
+        }
+
+        private sealed class RomFsEntry : IDisposable
+        {
+            private readonly IDisposable _owner;
+
+            public Stream Stream { get; }
+
+            public RomFsEntry(Stream stream, IDisposable owner)
+            {
+                Stream = stream;
+                _owner = owner;
+            }
+
+            public void Dispose()
+            {
+                Stream.Dispose();
+                _owner?.Dispose();
+            }
         }
 
         public static string GetFullPath(string basePath, string fileName)
@@ -665,9 +713,9 @@ namespace Ryujinx.HLE.FileSystem
         {
             if (disposing)
             {
-                foreach (Stream stream in _romFsByPid.Values)
+                foreach (RomFsEntry entry in _romFsByPid.Values)
                 {
-                    stream.Close();
+                    entry.Dispose();
                 }
 
                 _romFsByPid.Clear();

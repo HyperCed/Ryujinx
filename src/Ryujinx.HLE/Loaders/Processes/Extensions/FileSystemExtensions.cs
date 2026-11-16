@@ -7,6 +7,7 @@ using LibHac.Tools.FsSystem;
 using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Logging;
 using Ryujinx.Graphics.Gpu;
+using Ryujinx.HLE.Loaders.Npdm;
 using Ryujinx.HLE.Loaders.Executables;
 using Ryujinx.Memory;
 using System.Linq;
@@ -28,7 +29,20 @@ namespace Ryujinx.HLE.Loaders.Processes.Extensions
             }
             else
             {
-                metaLoader.LoadFromFile(fileSystem);
+                using UniqueRef<IFile> npdmFile = new();
+                fileSystem.OpenFile(ref npdmFile.Ref, ProcessConst.MainNpdmPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
+                npdmFile.Get.GetSize(out long size).ThrowIfFailure();
+
+                if (size > 32768)
+                {
+                    metaLoader.LoadFromFile(fileSystem).ThrowIfFailure();
+                }
+                else
+                {
+                    byte[] npdmBuffer = new byte[(int)size];
+                    npdmFile.Get.Read(out _, 0, npdmBuffer, ReadOption.None).ThrowIfFailure();
+                    metaLoader.Load(NpdmNormalizer.NormalizeForLibHac(npdmBuffer)).ThrowIfFailure();
+                }
             }
 
             return metaLoader;

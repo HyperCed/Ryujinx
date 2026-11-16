@@ -257,10 +257,19 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
 
             if (session == null)
             {
+                Logger.Warning?.Print(LogClass.KernelSvc, $"SendSyncRequest received invalid session handle 0x{handle:X8} in process {currentProcess.Pid}.");
+
                 return KernelResult.InvalidHandle;
             }
 
-            return session.SendSyncRequest();
+            Result result = session.SendSyncRequest();
+
+            if (result != Result.Success)
+            {
+                Logger.Warning?.Print(LogClass.KernelSvc, $"SendSyncRequest for handle 0x{handle:X8} in process {currentProcess.Pid} returned {result}.");
+            }
+
+            return result;
         }
 
         [Svc(0x22)]
@@ -1946,6 +1955,11 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
                 case InfoType.IsApplication:
                 case InfoType.FreeThreadCount:
                 case InfoType.AliasRegionExtraSize:
+                case InfoType.RemoteRegionAddress:
+                case InfoType.RemoteRegionSize:
+                case InfoType.RemoteMemorySize:
+                case InfoType.RemoteMemoryUsed:
+                case InfoType.ProcessPageSize:
                     {
                         if (subId != 0)
                         {
@@ -2050,6 +2064,26 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
 
                             case InfoType.AliasRegionExtraSize:
                                 value = process.MemoryManager.AliasRegionExtraSize;
+                                break;
+
+                            case InfoType.RemoteRegionAddress:
+                            case InfoType.RemoteRegionSize:
+                                ulong aliasRegionSize = process.MemoryManager.AliasRegionEnd - process.MemoryManager.AliasRegionStart;
+                                ulong remoteRegionSize = aliasRegionSize / 2;
+
+                                value = id == InfoType.RemoteRegionAddress
+                                    ? process.MemoryManager.AliasRegionStart + remoteRegionSize
+                                    : remoteRegionSize;
+                                break;
+
+                            case InfoType.RemoteMemorySize:
+                            case InfoType.RemoteMemoryUsed:
+                                value = 0;
+                                Logger.Warning?.Print(LogClass.KernelSvc, $"(STUBBED) Switch 2 GetInfo {id}, returning 0.");
+                                break;
+
+                            case InfoType.ProcessPageSize:
+                                value = KPageTableBase.PageSize;
                                 break;
                         }
 
@@ -2229,6 +2263,7 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
                     }
 
                 default:
+                    Logger.Warning?.Print(LogClass.KernelSvc, $"GetInfo received unknown id {(uint)id} (handle: {handle}, subId: {subId}).");
                     return KernelResult.InvalidEnumValue;
             }
 

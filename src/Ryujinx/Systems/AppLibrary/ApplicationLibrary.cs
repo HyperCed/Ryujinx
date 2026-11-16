@@ -118,12 +118,16 @@ namespace Ryujinx.Ava.Systems.AppLibrary
 
             LibHac.Result result = pfs.OpenFile(ref npdmFile.Ref, "/main.npdm".ToU8Span(), OpenMode.Read);
 
-            if (ResultFs.PathNotFound.Includes(result))
+            if (result.IsSuccess())
             {
                 Npdm npdm = new(npdmFile.Get.AsStream());
 
                 data.Name = npdm.TitleName;
                 data.Id = npdm.Aci0.TitleId;
+            }
+            else if (!ResultFs.PathNotFound.Includes(result))
+            {
+                result.ThrowIfFailure();
             }
 
             return data;

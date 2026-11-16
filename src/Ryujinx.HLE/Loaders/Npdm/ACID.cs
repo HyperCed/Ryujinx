@@ -26,17 +26,30 @@ namespace Ryujinx.HLE.Loaders.Npdm
         /// <exception cref="IOException">An I/O error occurred.</exception>
         public Acid(Stream stream, int offset)
         {
-            stream.Seek(offset, SeekOrigin.Begin);
-
             BinaryReader reader = new(stream);
 
-            Rsa2048Signature = reader.ReadBytes(0x100);
-            Rsa2048Modulus = reader.ReadBytes(0x100);
+            long acidHeaderOffset = offset + 0x200;
+            stream.Seek(acidHeaderOffset, SeekOrigin.Begin);
 
             if (reader.ReadInt32() != AcidMagic)
             {
-                throw new InvalidNpdmException("ACID Stream doesn't contain ACID section!");
+                acidHeaderOffset = offset + 0x300;
+                stream.Seek(acidHeaderOffset, SeekOrigin.Begin);
+
+                if (reader.ReadInt32() != AcidMagic)
+                {
+                    throw new InvalidNpdmException("ACID Stream doesn't contain ACID section!");
+                }
             }
+
+            int keyAreaSize = (int)(acidHeaderOffset - offset);
+
+            stream.Seek(offset, SeekOrigin.Begin);
+
+            Rsa2048Signature = reader.ReadBytes(0x100);
+            Rsa2048Modulus = reader.ReadBytes(keyAreaSize - 0x100);
+
+            stream.Seek(acidHeaderOffset + sizeof(int), SeekOrigin.Begin);
 
             // Size field used with the above signature (?).
             Unknown1 = reader.ReadInt32();
