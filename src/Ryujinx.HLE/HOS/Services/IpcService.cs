@@ -139,7 +139,9 @@ namespace Ryujinx.HLE.HOS.Services
 
             bool serviceExists = service.CmifCommands.TryGetValue(commandId, out MethodInfo processRequest);
 
-            if (context.Device.Configuration.IgnoreMissingServices || serviceExists)
+            bool isNx2Stub = service is INx2StubService;
+
+            if (context.Device.Configuration.IgnoreMissingServices || serviceExists || isNx2Stub)
             {
                 ResultCode result = ResultCode.Success;
 
@@ -155,9 +157,16 @@ namespace Ryujinx.HLE.HOS.Services
                 }
                 else
                 {
-                    string serviceName = (service is not DummyService dummyService) ? service.GetType().FullName : dummyService.ServiceName;
+                    if (service is INx2StubService nx2Stub)
+                    {
+                        Logger.Stub?.PrintStub(LogClass.ServiceAm, $"{nx2Stub.InterfaceName}: {commandId}");
+                    }
+                    else
+                    {
+                        string serviceName = (service is not DummyService dummyService) ? service.GetType().FullName : dummyService.ServiceName;
 
-                    Logger.Warning?.Print(LogClass.KernelIpc, $"Missing service {serviceName}: {commandId} ignored");
+                        Logger.Warning?.Print(LogClass.KernelIpc, $"Missing service {serviceName}: {commandId} ignored");
+                    }
                 }
 
                 if (_isDomain)
@@ -176,6 +185,7 @@ namespace Ryujinx.HLE.HOS.Services
 
                 context.ResponseData.Write(IpcMagic.Sfco);
                 context.ResponseData.Write((long)result);
+
             }
             else
             {
@@ -190,8 +200,9 @@ namespace Ryujinx.HLE.HOS.Services
             int commandId = (int)context.Request.Type - 0x10;
 
             bool serviceExists = TipcCommands.TryGetValue(commandId, out MethodInfo processRequest);
+            bool isNx2Stub = this is INx2StubService;
 
-            if (context.Device.Configuration.IgnoreMissingServices || serviceExists)
+            if (context.Device.Configuration.IgnoreMissingServices || serviceExists || isNx2Stub)
             {
                 ResultCode result = ResultCode.Success;
 
@@ -207,11 +218,16 @@ namespace Ryujinx.HLE.HOS.Services
                 }
                 else
                 {
-                    string serviceName;
+                    if (this is INx2StubService nx2Stub)
+                    {
+                        Logger.Stub?.PrintStub(LogClass.ServiceAm, $"{nx2Stub.InterfaceName}: {commandId}");
+                    }
+                    else
+                    {
+                        string serviceName = (this is not DummyService dummyService) ? GetType().FullName : dummyService.ServiceName;
 
-                    serviceName = (this is not DummyService dummyService) ? GetType().FullName : dummyService.ServiceName;
-
-                    Logger.Warning?.Print(LogClass.KernelIpc, $"Missing service {serviceName}: {commandId} ignored");
+                        Logger.Warning?.Print(LogClass.KernelIpc, $"Missing service {serviceName}: {commandId} ignored");
+                    }
                 }
 
                 context.ResponseData.BaseStream.Seek(0, SeekOrigin.Begin);

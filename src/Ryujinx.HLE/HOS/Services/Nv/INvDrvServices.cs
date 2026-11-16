@@ -69,6 +69,14 @@ namespace Ryujinx.HLE.HOS.Services.Nv
             _owner = 0;
         }
 
+        public INvDrvServices(ServiceCtx context, IVirtualMemoryManager clientMemory, ulong owner) : base(context.Device.System.NvDrvServer)
+        {
+            // Switch 2's GSV service creates this session already bound to the
+            // process supplied by TIPC SetCurrentProcessHandle.
+            _clientMemory = clientMemory;
+            _owner = owner;
+        }
+
         private NvResult Open(ServiceCtx context, string path, out int fd)
         {
             fd = -1;

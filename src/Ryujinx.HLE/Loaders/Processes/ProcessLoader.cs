@@ -208,6 +208,16 @@ namespace Ryujinx.HLE.Loaders.Processes
 
         public bool LoadUnpackedNca(string exeFsDirPath, string romFsPath = null)
         {
+            if (string.IsNullOrWhiteSpace(romFsPath))
+            {
+                string siblingRomFsPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exeFsDirPath))!, "romfs");
+
+                if (Directory.Exists(siblingRomFsPath))
+                {
+                    romFsPath = siblingRomFsPath;
+                }
+            }
+
             ProcessResult processResult = new LocalFileSystem(exeFsDirPath).Load(_device, romFsPath);
             
             if (processResult.ProcessId != 0 && _processesByPid.TryAdd(processResult.ProcessId, processResult))

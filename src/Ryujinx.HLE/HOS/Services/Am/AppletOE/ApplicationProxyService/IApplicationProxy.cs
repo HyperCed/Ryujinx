@@ -57,6 +57,22 @@ namespace Ryujinx.HLE.HOS.Services.Am.AppletOE.ApplicationProxyService
             return ResultCode.Success;
         }
 
+        [CommandCmif(40)]
+        public ResultCode GetNx2Interface40(ServiceCtx context)
+        {
+            MakeObject(context, new Nx2StubInterface("nx2:IApplicationProxy:40"));
+
+            return ResultCode.Success;
+        }
+
+        [CommandCmif(60)]
+        public ResultCode GetNx2Interface60(ServiceCtx context)
+        {
+            MakeObject(context, new Nx2StubInterface("nx2:IApplicationProxy:60"));
+
+            return ResultCode.Success;
+        }
+
         [CommandCmif(11)]
         // GetLibraryAppletCreator() -> object<nn::am::service::ILibraryAppletCreator>
         public ResultCode GetLibraryAppletCreator(ServiceCtx context)

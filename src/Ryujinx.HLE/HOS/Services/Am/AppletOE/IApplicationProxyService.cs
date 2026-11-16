@@ -8,6 +8,7 @@ namespace Ryujinx.HLE.HOS.Services.Am
         public IApplicationProxyService(ServiceCtx context) { }
 
         [CommandCmif(0)]
+        [CommandCmif(10)] // Switch 2 OpenApplicationProxy alias.
         // OpenApplicationProxy(u64, pid, handle<copy>) -> object<nn::am::service::IApplicationProxy>
         public ResultCode OpenApplicationProxy(ServiceCtx context)
         {

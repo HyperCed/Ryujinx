@@ -31,6 +31,11 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
         IsSvcPermitted,
         IoRegionHint,
         AliasRegionExtraSize,
+        RemoteRegionAddress,
+        RemoteRegionSize,
+        RemoteMemorySize,
+        RemoteMemoryUsed,
+        ProcessPageSize,
 
         MesosphereCurrentProcess = 65001,
     }

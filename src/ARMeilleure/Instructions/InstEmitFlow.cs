@@ -69,6 +69,11 @@ namespace ARMeilleure.Instructions
             EmitReturn(context, GetIntOrZR(context, op.Rn));
         }
 
+        public static void RetAuth(ArmEmitterContext context)
+        {
+            EmitReturn(context, GetIntOrZR(context, RegisterAlias.Lr));
+        }
+
         public static void Tbnz(ArmEmitterContext context) => EmitTb(context, onNotZero: true);
         public static void Tbz(ArmEmitterContext context) => EmitTb(context, onNotZero: false);
 
