@@ -68,7 +68,7 @@ namespace Ryujinx.HLE.HOS.Services.Am.AppletOE.ApplicationProxyService
         [CommandCmif(60)]
         public ResultCode GetNx2Interface60(ServiceCtx context)
         {
-            MakeObject(context, new Nx2StubInterface("nx2:IApplicationProxy:60"));
+            MakeObject(context, new IGraphicsScaleController());
 
             return ResultCode.Success;
         }

@@ -42,6 +42,62 @@ namespace Ryujinx.Graphics.Gpu
         public SynchronizationManager Synchronization { get; }
 
         /// <summary>
+        /// True once a Switch 2 NVIDIA driver identified itself. Its channels bind Ampere classes and drive
+        /// 3D and compute state through Turing MME64 macros, which the Maxwell engines can't run.
+        /// </summary>
+        public bool Nx2Ampere { get; set; }
+
+        /// <summary>
+        /// Switch 2 compute launch scheduling, shared by every channel.
+        /// </summary>
+        internal Engine.Nx2.Nx2QmdScheduler Nx2Qmd { get; } = new();
+
+
+        private readonly System.Collections.Generic.HashSet<ulong> _nx2SemaphoreRegions = [];
+
+        /// <summary>
+        /// Registers a two-page Switch 2 queue semaphore region: GPU releases go to the second page, and
+        /// the CPU and GPU waits read the same offset in the first.
+        /// </summary>
+        /// <param name="address">GPU virtual address of the region</param>
+        public void Nx2AddSemaphoreRegion(ulong address)
+        {
+            lock (_nx2SemaphoreRegions)
+            {
+                _nx2SemaphoreRegions.Add(address);
+            }
+        }
+
+        /// <summary>
+        /// Unregisters a Switch 2 queue semaphore region.
+        /// </summary>
+        /// <param name="address">GPU virtual address of the region</param>
+        public void Nx2RemoveSemaphoreRegion(ulong address)
+        {
+            lock (_nx2SemaphoreRegions)
+            {
+                _nx2SemaphoreRegions.Remove(address);
+            }
+        }
+
+        /// <summary>
+        /// Gets the address a semaphore release has to be mirrored to, if it lands on the second page of a
+        /// Switch 2 queue semaphore region.
+        /// </summary>
+        /// <param name="address">GPU virtual address of the release</param>
+        /// <param name="mirror">GPU virtual address of the mirror</param>
+        /// <returns>True if the release has a mirror</returns>
+        internal bool Nx2TryGetSemaphoreMirror(ulong address, out ulong mirror)
+        {
+            mirror = address - 0x1000;
+
+            lock (_nx2SemaphoreRegions)
+            {
+                return _nx2SemaphoreRegions.Count != 0 && _nx2SemaphoreRegions.Contains(mirror & ~0xfffUL);
+            }
+        }
+
+        /// <summary>
         /// Presentation window.
         /// </summary>
         public Window Window { get; }

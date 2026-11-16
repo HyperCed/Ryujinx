@@ -1,3 +1,4 @@
+using Ryujinx.Common.Logging;
 using Ryujinx.Graphics.Device;
 using Ryujinx.Graphics.Gpu.Engine.MME;
 using Ryujinx.Graphics.Gpu.Synchronization;
@@ -51,6 +52,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             _macroCode = new int[MacroCodeSize];
         }
 
+        private int _nx2UnmappedSemaphores;
+
+        /// <summary>
+        /// Switch 2: the semaphore acquire the channel is suspended on, if any.
+        /// </summary>
+        public Nx2PendingAcquire? Nx2PendingAcquire { get; set; }
+
         /// <summary>
         /// Create any syncs from WaitForIdle command that are currently pending.
         /// </summary>
@@ -89,6 +97,33 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             int value = _state.State.SemaphorecPayload;
 
             SemaphoredOperation operation = _state.State.SemaphoredOperation;
+
+            if (_context.Nx2Ampere)
+            {
+                if (!_parent.MemoryManager.IsMapped(address))
+                {
+                    if (_nx2UnmappedSemaphores++ < 16)
+                    {
+                        Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 semaphore operation {operation} on unmapped address 0x{address:X}");
+                    }
+
+                    return;
+                }
+
+                if (operation is SemaphoredOperation.Acquire or SemaphoredOperation.AcqGeq or SemaphoredOperation.AcqAnd)
+                {
+                    // NVN2 gates each command buffer with an acquire the CPU releases after writing it:
+                    // reading past an unmet one runs stale commands. The channel is suspended instead.
+                    Nx2PendingAcquire acquire = new(address, (uint)value, operation);
+
+                    if (!acquire.IsMet(_parent.MemoryManager))
+                    {
+                        Nx2PendingAcquire = acquire;
+                    }
+
+                    return;
+                }
+            }
 
             if (_state.State.SemaphoredReleaseSize == SemaphoredReleaseSize.SixteenBytes)
             {
@@ -136,6 +171,14 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 }
 
                 _parent.MemoryManager.Write(address, value);
+            }
+
+            if (operation is SemaphoredOperation.Release or SemaphoredOperation.Reduction &&
+                _context.Nx2TryGetSemaphoreMirror(address, out ulong mirror))
+            {
+                // Switch 2 queues release progress to the second page of a semaphore region and wait
+                // (GPU acquire and CPU poll) on the same offset in the first.
+                _parent.MemoryManager.Write(mirror, value);
             }
         }
 

@@ -71,11 +71,23 @@ namespace Ryujinx.HLE.FileSystem
                 {
                     RomFsBuilder builder = new();
 
-                    foreach (DirectoryEntryEx entry in romFsFileSystem.EnumerateEntries()
-                                 .Where(entry => entry.Type == DirectoryEntryType.File)
-                                 .OrderBy(entry => entry.FullPath, StringComparer.Ordinal))
+                    // Large unpacked titles hold hundreds of thousands of files, so only stat each one once, in parallel.
+                    string rootPath = Path.GetFullPath(fileName).TrimEnd(Path.DirectorySeparatorChar);
+                    FileInfo[] files = new DirectoryInfo(rootPath).GetFiles("*", SearchOption.AllDirectories);
+                    string[] paths = new string[files.Length];
+                    long[] sizes = new long[files.Length];
+
+                    System.Threading.Tasks.Parallel.For(0, files.Length, i =>
                     {
-                        builder.AddFile(entry.FullPath, new Ryujinx.HLE.HOS.Services.Fs.FileSystemProxy.LazyFile(entry.FullPath, fileName, romFsFileSystem));
+                        paths[i] = files[i].FullName[rootPath.Length..].Replace(Path.DirectorySeparatorChar, '/');
+                        sizes[i] = files[i].Length;
+                    });
+
+                    Array.Sort(paths, sizes, StringComparer.Ordinal);
+
+                    for (int i = 0; i < paths.Length; i++)
+                    {
+                        builder.AddFile(paths[i], new Ryujinx.HLE.HOS.Services.Fs.FileSystemProxy.LazyFile(paths[i], sizes[i], romFsFileSystem));
                     }
 
                     Stream romFsStream = builder.Build().AsStream(FileAccess.Read);

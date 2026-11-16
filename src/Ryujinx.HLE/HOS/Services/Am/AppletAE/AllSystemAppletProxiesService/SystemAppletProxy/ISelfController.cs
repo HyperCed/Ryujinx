@@ -54,7 +54,7 @@ namespace Ryujinx.HLE.HOS.Services.Am.AppletAE.AllSystemAppletProxiesService.Sys
         // GetNx2GraphicsSystemSession() -> handle<move>
         public ResultCode GetNx2GraphicsSystemSession(ServiceCtx context)
         {
-            Nx2StubInterface service = new("nn::gsv::INx2GraphicsSystemSession", registerTipc: true);
+            Nx2.INx2GraphicsSystemSession service = new();
 
             service.TrySetServer(Server);
             Result createSessionResult = context.Device.System.KernelContext.Syscall.CreateSession(out int serverSessionHandle, out int clientSessionHandle, false, 0);

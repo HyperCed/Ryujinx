@@ -130,7 +130,7 @@ namespace Ryujinx.Cpu.LightningJit
 
         private CompiledFunction Compile(ulong address, ExecutionMode mode)
         {
-            return AarchCompiler.Compile(CpuPresets.CortexA57, Memory, address, FunctionTable, Stubs.DispatchStub, mode, RuntimeInformation.ProcessArchitecture);
+            return AarchCompiler.Compile(CpuPresets.Current, Memory, address, FunctionTable, Stubs.DispatchStub, mode, RuntimeInformation.ProcessArchitecture);
         }
 
         public void InvalidateJitCacheRegion(ulong address, ulong size)

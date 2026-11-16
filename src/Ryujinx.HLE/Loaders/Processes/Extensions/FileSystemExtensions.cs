@@ -41,7 +41,15 @@ namespace Ryujinx.HLE.Loaders.Processes.Extensions
                 {
                     byte[] npdmBuffer = new byte[(int)size];
                     npdmFile.Get.Read(out _, 0, npdmBuffer, ReadOption.None).ThrowIfFailure();
-                    metaLoader.Load(NpdmNormalizer.NormalizeForLibHac(npdmBuffer)).ThrowIfFailure();
+                    byte[] normalized = NpdmNormalizer.NormalizeForLibHac(npdmBuffer);
+
+                    // Only Switch 2 programs have the wider ACID key area. Their code uses ARMv8.1+
+                    // instructions the Switch 1 CPU doesn't have.
+                    Ryujinx.Cpu.LightningJit.CpuPresets.Current = ReferenceEquals(normalized, npdmBuffer)
+                        ? Ryujinx.Cpu.LightningJit.CpuPresets.CortexA57
+                        : Ryujinx.Cpu.LightningJit.CpuPresets.CortexA78C;
+
+                    metaLoader.Load(normalized).ThrowIfFailure();
                 }
             }
 

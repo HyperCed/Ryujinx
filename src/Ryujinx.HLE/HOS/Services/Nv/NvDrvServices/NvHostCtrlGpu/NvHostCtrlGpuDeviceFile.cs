@@ -15,6 +15,7 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostCtrlGpu
 
         private readonly KEvent _errorEvent;
         private readonly KEvent _unknownEvent;
+        private bool _nx2Caller;
 
         public NvHostCtrlGpuDeviceFile(ServiceCtx context, IVirtualMemoryManager memory, ulong owner) : base(context, owner)
         {
@@ -65,6 +66,13 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostCtrlGpu
                 }
             }
 
+            if (result == NvInternalResult.NotImplemented && _nx2Caller)
+            {
+                Logger.Warning?.Print(LogClass.ServiceNv, $"(STUBBED) Switch 2 ctrl-gpu ioctl type={command.Type:x} number={command.Number:x}");
+                arguments.Clear();
+                result = NvInternalResult.Success;
+            }
+
             return result;
         }
 
@@ -77,7 +85,9 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostCtrlGpu
                 switch (command.Number)
                 {
                     case 0x05:
-                        result = CallIoctlMethod<GetCharacteristicsArguments, GpuCharacteristics>(GetCharacteristics, arguments, inlineOutBuffer);
+                        result = inlineOutBuffer.Length >= Nx2Driver.CharacteristicsSize
+                            ? Nx2GetCharacteristics(arguments, inlineOutBuffer)
+                            : CallIoctlMethod<GetCharacteristicsArguments, GpuCharacteristics>(GetCharacteristics, arguments, inlineOutBuffer);
                         break;
                     case 0x06:
                         result = CallIoctlMethod<GetTpcMasksArguments, int>(GetTpcMasks, arguments, inlineOutBuffer);
@@ -86,12 +96,134 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostCtrlGpu
                         result = CallIoctlMethod<NumVsmsArguments>(NumVsms, arguments);
                         break;
                     case 0x13:
-                        result = CallIoctlMethod<VsmsMappingArguments>(VsmsMapping, arguments);
+                        result = _nx2Caller
+                            ? Nx2VsmsMapping(inlineOutBuffer)
+                            : CallIoctlMethod<VsmsMappingArguments>(VsmsMapping, arguments);
+                        break;
+                    case 0x1f:
+                        if (_nx2Caller)
+                        {
+                            result = Nx2GetEngineInfo(arguments, inlineOutBuffer);
+                        }
                         break;
                 }
             }
 
+            if (result == NvInternalResult.NotImplemented && _nx2Caller)
+            {
+                // Switch 2 NvRm uses ioctls Switch 1 never had; answer them with a zeroed success so
+                // device setup can continue, and log each one.
+                Logger.Warning?.Print(LogClass.ServiceNv, $"(STUBBED) Switch 2 ctrl-gpu ioctl3 type={command.Type:x} number={command.Number:x}");
+                arguments.Clear();
+                inlineOutBuffer.Clear();
+                result = NvInternalResult.Success;
+            }
+
             return result;
+        }
+
+        // Switch 2 SDKs ask for a 0xD0-byte characteristics block. Their NvRm only accepts chip ids 0x17E,
+        // 0x12B and 0x12E and its NVN path rejects the Maxwell ones, so report the Switch 2 Ampere chip.
+        // Fields past the Switch 1 layout are left zero. Values are best guesses.
+        private NvInternalResult Nx2GetCharacteristics(Span<byte> arguments, Span<byte> inlineOutBuffer)
+        {
+            _nx2Caller = true;
+            Nx2Driver.Active = true;
+            Context.Device.Gpu.Nx2Ampere = true;
+
+            GetCharacteristicsArguments scratch = default;
+            GpuCharacteristics characteristics = default;
+
+            GetCharacteristics(ref scratch, ref characteristics);
+
+#pragma warning disable IDE0055 // Disable formatting
+            characteristics.Arch             = 0x170;  // Ampere
+            characteristics.Impl             = 0xe;    // Chip id 0x17E as listed in the Switch 2 NvRm chip table
+            characteristics.NumTpcPerGpc     = 0x6;
+            characteristics.SmArchSmVersion  = 0x808;  // NVN2 only accepts SM 0x808 (its class table lookup)
+            characteristics.SmArchSpaVersion = 0x808;
+            characteristics.ThreedClass      = 0xc797; // AMPERE_B
+            characteristics.ComputeClass     = 0xc7c0; // AMPERE_COMPUTE_B
+            characteristics.GpfifoClass      = 0xc56f; // AMPERE_CHANNEL_GPFIFO_A
+            characteristics.DmaCopyClass     = 0xc7b5; // AMPERE_DMA_COPY_B
+            characteristics.ChipName         = 0x6631306167; // "ga10f"
+#pragma warning restore IDE0055
+            characteristics.Flags |= 0x100;      // NVGPU_GPU_FLAGS_SUPPORT_TSG: NvRm binds channels to a TSG
+            characteristics.Flags |= 1L << 22;   // NVGPU_GPU_FLAGS_SUPPORT_TSG_SUBCONTEXTS
+            characteristics.Flags |= 1L << 26;   // NVGPU_GPU_FLAGS_SUPPORT_SYNCPOINT_ADDRESS: syncpoint shim
+            characteristics.Flags |= 1L << 34;   // NVGPU_GPU_FLAGS_SUPPORT_MAPPING_MODIFY
+            characteristics.Flags |= 1L << 35;   // NVGPU_GPU_FLAGS_SUPPORT_REMAP
+            characteristics.Flags |= 0x1fL << 40; // Engine support bits (2D, 3D, compute, inline-to-memory, ZBC)
+
+            Span<byte> block = stackalloc byte[Nx2Driver.CharacteristicsSize];
+
+            System.Runtime.InteropServices.MemoryMarshal.Write(block, in characteristics);
+
+            // The Switch 2 layout keeps nine s16 interface versions at 0x70..0x80; its NvRm requires e.g.
+            // [0x78] >= 6 and enables features above 0xa, 0x1f and 0x26.
+            for (int offset = 0x70; offset <= 0x80; offset += 2)
+            {
+                System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(block[offset..], 0x40);
+            }
+
+            // NvRm sizes each TSG's subcontext (VEID) allocator from the u32 at 0xb4.
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(block[0xb4..], 64);
+
+            block.CopyTo(inlineOutBuffer);
+
+            if (arguments.Length >= 8)
+            {
+                System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(arguments, Nx2Driver.CharacteristicsSize);
+            }
+
+            if (arguments.Length > 16)
+            {
+                block[..Math.Min(block.Length, arguments.Length - 16)].CopyTo(arguments[16..]);
+            }
+
+            Logger.Warning?.Print(LogClass.ServiceNv, "Switch 2 caller, reporting Ampere chip 0x17E");
+
+            return NvInternalResult.Success;
+        }
+
+        // NVGPU_GPU_IOCTL_VSMS_MAPPING: a buffer of {gpc_index, tpc_index} byte pairs, one per virtual SM.
+        // The SDK treats a pair left at its 0xc0c0 sentinel as failure: one GPC, two SMs per TPC.
+        private static NvInternalResult Nx2VsmsMapping(Span<byte> inlineOutBuffer)
+        {
+            for (int i = 0; i + 1 < inlineOutBuffer.Length; i += 2)
+            {
+                inlineOutBuffer[i] = 0;
+                inlineOutBuffer[i + 1] = (byte)(i / 4);
+            }
+
+            return NvInternalResult.Success;
+        }
+
+        // nvgpu GET_ENGINE_INFO as the Switch 2 NvRm uses it: args {u32 buf_size, u32 reserved, u64 buf_addr},
+        // queried once for the size and once with an inline output buffer of 16-byte items
+        // {u32 engine_id, u32 engine_instance, s32 runlist_id, u32 reserved}.
+        private static NvInternalResult Nx2GetEngineInfo(Span<byte> arguments, Span<byte> inlineOutBuffer)
+        {
+            ReadOnlySpan<int> items =
+            [
+                0, 0, 0, 0, // NVGPU_ENGINE_GR
+                2, 0, 1, 0, // NVGPU_ENGINE_ASYNC_COPY
+            ];
+            ReadOnlySpan<byte> itemBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(items);
+
+            uint bufferSize = arguments.Length >= 4 ? System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(arguments) : 0;
+
+            if (bufferSize >= itemBytes.Length && inlineOutBuffer.Length >= itemBytes.Length)
+            {
+                itemBytes.CopyTo(inlineOutBuffer);
+            }
+
+            if (arguments.Length >= 4)
+            {
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(arguments, (uint)itemBytes.Length);
+            }
+
+            return NvInternalResult.Success;
         }
 
         public override NvInternalResult QueryEvent(out int eventHandle, uint eventId)

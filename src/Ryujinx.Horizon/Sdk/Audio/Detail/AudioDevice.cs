@@ -56,6 +56,8 @@ namespace Ryujinx.Horizon.Sdk.Audio.Detail
             return false;
         }
 
+        private bool _outputVolumeAutoTuneEnabled;
+
         [CmifCommand(0)]
         public Result ListAudioDeviceName([Buffer(HipcBufferFlags.Out | HipcBufferFlags.MapAlias)] Span<DeviceName> names, out int nameCount)
         {
@@ -264,15 +266,17 @@ namespace Ryujinx.Horizon.Sdk.Audio.Detail
         [CmifCommand(19)] // 18.0.0+
         public Result SetAudioDeviceOutputVolumeAutoTuneEnabled(bool enabled)
         {
-            return AudioResult.NotImplemented;
+            _outputVolumeAutoTuneEnabled = enabled;
+
+            return Result.Success;
         }
 
         [CmifCommand(20)] // 18.0.0+
         public Result IsAudioDeviceOutputVolumeAutoTuneEnabled(out bool enabled)
         {
-            enabled = false;
+            enabled = _outputVolumeAutoTuneEnabled;
 
-            return AudioResult.NotImplemented;
+            return Result.Success;
         }
 
         protected virtual void Dispose(bool disposing)

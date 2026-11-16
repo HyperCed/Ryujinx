@@ -216,6 +216,17 @@ namespace Ryujinx.Cpu.LightningJit.Arm64
                         gprMask |= MaskFromIndex(ExtractRt2(flags, encoding));
                     }
                 }
+
+                if (name.IsAtomicMemory)
+                {
+                    gprMask |= MaskFromIndex(ExtractRs(flags, encoding));
+
+                    if (name == InstName.Casp)
+                    {
+                        // CASP works on the register pairs Rs:Rs+1 and Rt:Rt+1.
+                        gprMask |= MaskFromIndex(ExtractRs(encoding) + 1) | MaskFromIndex((int)(encoding & 0x1f) + 1);
+                    }
+                }
             }
 
             return (gprMask, fpSimdMask);
@@ -297,6 +308,11 @@ namespace Ryujinx.Cpu.LightningJit.Arm64
                 if (flags.HasFlag(InstFlags.Rs))
                 {
                     gprMask |= MaskFromIndex(ExtractRs(flags, encoding));
+
+                    if (name == InstName.Casp)
+                    {
+                        gprMask |= MaskFromIndex(ExtractRs(encoding) + 1);
+                    }
                 }
             }
 

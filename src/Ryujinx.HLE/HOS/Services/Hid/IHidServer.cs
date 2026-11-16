@@ -1397,6 +1397,34 @@ namespace Ryujinx.HLE.HOS.Services.Hid
             return ResultCode.Success;
         }
 
+        [CommandCmif(213)] // Switch 2
+        // SendVibrationValueInMode(bytes<0x18>, nn::applet::AppletResourceUserId)
+        public ResultCode SendVibrationValueInMode(ServiceCtx context)
+        {
+            // The layout of the 0x18 bytes is only known from captures. Rumble is best effort, so the
+            // request is dropped rather than failed.
+            return ResultCode.Success;
+        }
+
+        [CommandCmif(214)] // Switch 2
+        // SendVibrationValuesInMode(u64, nn::applet::AppletResourceUserId, buffer<array<nn::hid::VibrationDeviceHandle>, type: 9>, buffer<array<nn::hid::VibrationValue>, type: 9>)
+        public ResultCode SendVibrationValuesInMode(ServiceCtx context)
+        {
+            // Same as SendVibrationValues, behind one more u64.
+            context.RequestData.ReadUInt64();
+
+            return SendVibrationValues(context);
+        }
+
+        [CommandCmif(220)] // Switch 2
+        // IsOunceVibrationDeviceMounted(nn::hid::VibrationDeviceHandle, nn::applet::AppletResourceUserId) -> bool
+        public ResultCode IsOunceVibrationDeviceMounted(ServiceCtx context)
+        {
+            context.ResponseData.Write(false);
+
+            return ResultCode.Success;
+        }
+
         [CommandCmif(210)] // 4.0.0+
         // EndPermitVibrationSession()
         public ResultCode EndPermitVibrationSession(ServiceCtx context)

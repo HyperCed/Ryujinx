@@ -18,6 +18,8 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostChannel
         private int _smExceptionBptPauseReportEventHandle;
         private int _errorNotifierEventHandle;
 
+        private readonly System.Collections.Generic.Dictionary<uint, int> _nx2EventHandles = [];
+
         public NvHostGpuDeviceFile(ServiceCtx context, IVirtualMemoryManager memory, ulong owner) : base(context, memory, owner)
         {
             _smExceptionBptIntReportEvent = CreateEvent(context, out _smExceptionBptIntReportEventHandle);
@@ -64,6 +66,18 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostChannel
                 0x3 => _errorNotifierEventHandle,
                 _ => 0,
             };
+
+            if (eventHandle == 0 && Nx2Driver.Active)
+            {
+                // Switch 2 NVN also asks for event 7 and multi-waits on it with its syncpoint events.
+                // Nothing signals it yet.
+                if (!_nx2EventHandles.TryGetValue(eventId, out eventHandle))
+                {
+                    CreateEvent(Context, out eventHandle);
+                    _nx2EventHandles[eventId] = eventHandle;
+                }
+            }
+
             return eventHandle != 0 ? NvInternalResult.Success : NvInternalResult.InvalidInput;
         }
 

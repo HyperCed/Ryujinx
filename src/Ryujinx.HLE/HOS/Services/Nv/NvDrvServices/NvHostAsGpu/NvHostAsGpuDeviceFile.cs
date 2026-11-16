@@ -41,6 +41,12 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostAsGpu
         private readonly AddressSpaceContext _asContext;
         private readonly NvMemoryAllocator _memoryAllocator;
 
+        // Switch 2: the VA layout NvRm asked for with InitializeEx.
+        private bool _nx2;
+        private ulong _nx2VaStart;
+        private ulong _nx2VaSplit;
+        private ulong _nx2VaEnd;
+
         public NvHostAsGpuDeviceFile(ServiceCtx context, IVirtualMemoryManager memory, ulong owner) : base(context, owner)
         {
             _asContext = new AddressSpaceContext(context.Device.Gpu.CreateMemoryManager(owner, context.Device.Memory.Size));
@@ -75,6 +81,12 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostAsGpu
                         break;
                     case 0x09:
                         result = CallIoctlMethod<InitializeExArguments>(InitializeEx, arguments);
+                        break;
+                    case 0x0b:
+                        if (_nx2)
+                        {
+                            result = CallIoctlMethod<Nx2SyncpointShimInfo>(Nx2GetSyncpointShimInfo, arguments);
+                        }
                         break;
                     case 0x14:
                         result = CallIoctlMethod<RemapArguments>(Remap, arguments);
@@ -344,6 +356,12 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostAsGpu
                 VmRegion vmRegion = _vmRegions[i];
                 uint pageSize = _pageSizes[i];
 
+                if (_nx2)
+                {
+                    // Small pages up to the split, big pages past it.
+                    vmRegion = i == 0 ? new VmRegion(_nx2VaStart, _nx2VaSplit) : new VmRegion(_nx2VaSplit, _nx2VaEnd);
+                }
+
                 region.PageSize = pageSize;
                 region.Offset = vmRegion.Start;
                 region.Pages = (vmRegion.Limit - vmRegion.Start) / pageSize;
@@ -358,6 +376,45 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostAsGpu
         private NvInternalResult InitializeEx(ref InitializeExArguments arguments)
         {
             Logger.Stub?.PrintStub(LogClass.ServiceNv);
+
+            if (Nx2Driver.Active && !_nx2)
+            {
+                // Switch 2 NvRm (flags 5, no big page size) asks for small pages over the whole range
+                // [0x8000000, 0xC000000000) with no split, and NVN then reserves 4 KiB VA up to 512 GiB.
+                // Keep a small big-page region past the end.
+                _nx2 = true;
+                _nx2VaStart = arguments.Unknown0 != 0 ? arguments.Unknown0 : Nx2Driver.GpuVaStart;
+                _nx2VaEnd = arguments.Unknown1 != 0 ? arguments.Unknown1 : Nx2Driver.GpuVaEnd;
+                _nx2VaSplit = arguments.Unknown2;
+
+                if (_nx2VaSplit == 0)
+                {
+                    _nx2VaSplit = _nx2VaEnd;
+                    _nx2VaEnd += 4UL << 30;
+                }
+
+                Logger.Info?.Print(LogClass.ServiceNv, $"Switch 2 GPU address space: flags={arguments.Flags:x} VA [{_nx2VaStart:x}, {_nx2VaEnd:x}), big pages from {_nx2VaSplit:x}");
+
+                // Switch 2 titles never map through this device: memory registered with nx2:gpu is used
+                // at GPU VA == CPU VA.
+                Nx2GpuMemoryRegistry.AddListener(_asContext.Gmm);
+            }
+
+            return NvInternalResult.Success;
+        }
+
+        // Switch 2 NvRm (with characteristics flag 26) asks for the read-only syncpoint shim: a GPU page
+        // whose u32 at id * stride reads as that syncpoint's value; NVN waits on syncpoints through it.
+        // It sits on the last page of the VA range.
+        private NvInternalResult Nx2GetSyncpointShimInfo(ref Nx2SyncpointShimInfo arguments)
+        {
+            arguments.Address = _nx2VaEnd - SmallPageSize;
+            arguments.Stride = sizeof(uint);
+            arguments.Count = Ryujinx.Graphics.Gpu.Synchronization.SynchronizationManager.MaxHardwareSyncpoints;
+
+            _asContext.Gmm.SetSyncpointShim(arguments.Address, arguments.Count, Context.Device.Gpu.Synchronization.GetSyncpointValue);
+
+            Logger.Info?.Print(LogClass.ServiceNv, $"Switch 2 syncpoint shim at {arguments.Address:x} ({arguments.Count} syncpoints)");
 
             return NvInternalResult.Success;
         }
@@ -398,6 +455,12 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostAsGpu
             return NvInternalResult.Success;
         }
 
-        public override void Close() { }
+        public override void Close()
+        {
+            if (_nx2)
+            {
+                Nx2GpuMemoryRegistry.RemoveListener(_asContext.Gmm);
+            }
+        }
     }
 }

@@ -960,7 +960,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
                     KMemoryPermission.None,
                     MemoryAttribute.BorrowedAndIpcMapped,
                     MemoryAttribute.None,
-                    MemoryAttribute.DeviceMappedAndUncached,
+                    MemoryAttribute.DeviceMappedAndUncached | MemoryAttribute.GpuAccessible,
                     out MemoryState state,
                     out KMemoryPermission permission,
                     out MemoryAttribute attribute))

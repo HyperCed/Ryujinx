@@ -1073,6 +1073,20 @@ namespace Ryujinx.Cpu.LightningJit.Arm64
                 or InstName.Ld3AdvsimdSnglAsNoPostIndex or InstName.Ld3AdvsimdSnglAsPostIndex
                 or InstName.Ld4AdvsimdSnglAsNoPostIndex or InstName.Ld4AdvsimdSnglAsPostIndex;
 
+            // LSE atomics: Rs holds the operand (or the compare value) and is read, unlike the status
+            // register of the exclusive stores, which share the field.
+            public bool IsAtomicMemory => name is
+                InstName.Cas or InstName.Casb or InstName.Cash or InstName.Casp
+                or InstName.Ldadd or InstName.Ldaddb or InstName.Ldaddh
+                or InstName.Ldclr or InstName.Ldclrb or InstName.Ldclrh
+                or InstName.Ldeor or InstName.Ldeorb or InstName.Ldeorh
+                or InstName.Ldset or InstName.Ldsetb or InstName.Ldseth
+                or InstName.Ldsmax or InstName.Ldsmaxb or InstName.Ldsmaxh
+                or InstName.Ldsmin or InstName.Ldsminb or InstName.Ldsminh
+                or InstName.Ldumax or InstName.Ldumaxb or InstName.Ldumaxh
+                or InstName.Ldumin or InstName.Lduminb or InstName.Lduminh
+                or InstName.Swp or InstName.Swpb or InstName.Swph;
+
             public bool IsPrefetchMemory => name is 
                 InstName.PrfmImm or InstName.PrfmLit or InstName.PrfmReg or InstName.Prfum;
         }

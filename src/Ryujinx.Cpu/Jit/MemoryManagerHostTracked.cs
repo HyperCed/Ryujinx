@@ -80,7 +80,7 @@ namespace Ryujinx.Cpu.Jit
             }
 
             _pages = new ManagedPageFlags(asBits);
-            _nativePageTable = new(asSize);
+            _nativePageTable = new(asSize, invalidAccessHandler);
             _addressSpace = new(Tracking, backingMemory, _nativePageTable, useProtectionMirrors);
         }
 

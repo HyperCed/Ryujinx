@@ -1,7 +1,9 @@
+using Ryujinx.Common.Logging;
 using Ryujinx.Graphics.Device;
 using Ryujinx.Graphics.Gpu.Engine.Compute;
 using Ryujinx.Graphics.Gpu.Engine.Dma;
 using Ryujinx.Graphics.Gpu.Engine.InlineToMemory;
+using Ryujinx.Graphics.Gpu.Engine.Nx2;
 using Ryujinx.Graphics.Gpu.Engine.Threed;
 using Ryujinx.Graphics.Gpu.Engine.Twod;
 using Ryujinx.Graphics.Gpu.Image;
@@ -22,6 +24,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         private const int LoadInlineDataMethodOffset = 0x6d;
         private const int UniformBufferUpdateDataMethodOffset = 0x8e4;
 
+        private readonly GpuContext _context;
         private readonly GpuChannel _channel;
 
         /// <summary>
@@ -68,6 +71,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         /// <param name="channel">Channel that the GPFIFO processor belongs to</param>
         public GPFifoProcessor(GpuContext context, GpuChannel channel)
         {
+            _context = context;
             _channel = channel;
 
             _fifoClass = new GPFifoClass(context, this);
@@ -154,7 +158,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool TryFastI2mBufferUpdate(ReadOnlySpan<int> commandBuffer, ref int offset)
         {
-            if (_state.Method == LoadInlineDataMethodOffset && _state.NonIncrementing && _state.SubChannel <= 2)
+            if (_state.Method == LoadInlineDataMethodOffset && _state.NonIncrementing && _state.SubChannel <= 2 && !_context.Nx2Ampere)
             {
                 int availableCount = commandBuffer.Length - offset;
                 int consumeCount = Math.Min(_state.MethodCount, availableCount);
@@ -197,7 +201,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         {
             int availableCount = commandBuffer.Length - offset;
 
-            if (meth.MethodAddress == UniformBufferUpdateDataMethodOffset &&
+            if (!_context.Nx2Ampere &&
+                meth.MethodAddress == UniformBufferUpdateDataMethodOffset &&
                 meth.MethodCount < availableCount &&
                 meth.SecOp == SecOp.NonIncMethod)
             {
@@ -218,7 +223,79 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         {
             if (offset < 0x60)
             {
+                if (_context.Nx2Ampere && offset is >= 0x45 and <= 0x48)
+                {
+                    // Macro code is 96-bit Turing instructions, kept apart from the Maxwell macros. A
+                    // channel has one macro RAM for all its classes: the 3D queue uploads through its 3D
+                    // subchannel and calls the same code on compute, compute queues upload through theirs.
+                    Nx2MacroEngine macros = _nx2Macros;
+
+                    switch (offset)
+                    {
+                        case 0x45:
+                            macros.SetInstructionPointer((uint)argument);
+                            break;
+                        case 0x46:
+                            macros.AddCode((uint)argument);
+                            break;
+                        case 0x47:
+                            macros.SetStartAddressPointer((uint)argument);
+                            break;
+                        case 0x48:
+                            macros.Bind((uint)argument);
+                            break;
+                    }
+
+                    return;
+                }
+
+                if (_context.Nx2Ampere)
+                {
+                    _nx2FifoRegisters[offset] = (uint)argument;
+
+                    if (offset is >= 0x17 and <= 0x1b)
+                    {
+                        if (offset == 0x1b)
+                        {
+                            Nx2SemaphoreExecute((uint)argument);
+                        }
+
+                        return;
+                    }
+                }
+
                 _fifoClass.Write(offset * 4, argument);
+            }
+            else if (_context.Nx2Ampere)
+            {
+                // Switch 2 channels bind Ampere classes and drive them through Turing MME64 macros.
+                // Their methods go to the channel's own register files; nothing is drawn from them yet.
+                Nx2Engine engine = GetNx2Engine(subChannel);
+
+                if (engine == null)
+                {
+                    // Inline-to-memory and copy engines keep their Maxwell implementations: NVN2 writes
+                    // its QMDs and command lists through them. The 2D engine is not used.
+                    if (offset < 0xe00)
+                    {
+                        if (subChannel == 2)
+                        {
+                            _i2mClass.Write(offset * 4, argument);
+                        }
+                        else if (subChannel == 4)
+                        {
+                            _dmaClass.Write(offset * 4, argument);
+                        }
+                    }
+                }
+                else if (offset < Nx2Engine.RegisterCount)
+                {
+                    engine.Write((uint)offset, (uint)argument);
+                }
+                else
+                {
+                    engine.WriteMacro(offset, (uint)argument, isLastCall);
+                }
             }
             else if (offset < 0xe00)
             {
@@ -273,6 +350,251 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                     }
                 }
             }
+        }
+
+        private struct Nx2ParkedMethod
+        {
+            public DmaState State;
+            public ulong ResumeAddress; // Where the entry that continues the method starts
+        }
+
+        private const int Nx2MaxParkedMethods = 16;
+
+        private static readonly bool _nx2ParkSplitMethods = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RYUJINX_NX2_PARK_SPLIT_METHODS"));
+
+        private readonly System.Collections.Generic.List<Nx2ParkedMethod> _nx2ParkedMethods = [];
+        private ulong _nx2SplitMethodEnd; // End of the last entry that ended inside a method
+        private readonly uint[] _nx2FifoRegisters = new uint[0x60];
+        private int _nx2Warnings;
+
+        /// <summary>
+        /// Switch 2: true while the channel is suspended on a semaphore acquire that is not met yet.
+        /// </summary>
+        public bool Nx2IsSuspended
+        {
+            get
+            {
+                if (_fifoClass.Nx2PendingAcquire is Nx2PendingAcquire acquire)
+                {
+                    if (!acquire.IsMet(MemoryManager))
+                    {
+                        return true;
+                    }
+
+                    _fifoClass.Nx2PendingAcquire = null;
+                }
+
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Switch 2: the acquire the channel is suspended on, for diagnostics.
+        /// </summary>
+        public Nx2PendingAcquire? Nx2PendingAcquire => _fifoClass.Nx2PendingAcquire;
+
+        /// <summary>
+        /// Switch 2: gives up on the acquire the channel is suspended on.
+        /// </summary>
+        public void Nx2ForceResume()
+        {
+            _fifoClass.Nx2PendingAcquire = null;
+        }
+
+        /// <summary>
+        /// Processes a command buffer of a Switch 2 channel, stopping at a semaphore acquire that is not met.
+        /// </summary>
+        /// <param name="baseGpuVa">Base GPU virtual address of the command buffer</param>
+        /// <param name="commandBuffer">Command buffer</param>
+        /// <param name="start">Index of the first word to process (not 0 when resuming)</param>
+        /// <returns>Index of the next word to process; the length of the buffer once it is done</returns>
+        public int Nx2Process(ulong baseGpuVa, ReadOnlySpan<int> commandBuffer, int start)
+        {
+            // A method's data continues across GP entries, whatever their level: NVN2 ends a main entry
+            // after a macro's first word and supplies the remaining parameters in a subroutine entry.
+            // RYUJINX_NX2_PARK_SPLIT_METHODS restores the older guess (an entry elsewhere is a call that
+            // starts clean; the split method resumes where it ended).
+            if (start == 0 && _nx2ParkSplitMethods)
+            {
+                Nx2ResolveSplitMethod(baseGpuVa);
+            }
+
+            for (int index = start; index < commandBuffer.Length; index++)
+            {
+                int command = commandBuffer[index];
+
+                ulong gpuVa = baseGpuVa + (ulong)index * 4;
+
+                if (_state.MethodCount != 0)
+                {
+                    Send(gpuVa, _state.Method, command, _state.SubChannel, _state.MethodCount <= 1);
+
+                    if (!_state.NonIncrementing)
+                    {
+                        _state.Method++;
+                    }
+
+                    if (_state.IncrementOnce)
+                    {
+                        _state.NonIncrementing = true;
+                    }
+
+                    _state.MethodCount--;
+                }
+                else
+                {
+                    CompressedMethod meth = Unsafe.As<int, CompressedMethod>(ref command);
+
+                    switch (meth.SecOp)
+                    {
+                        case SecOp.IncMethod:
+                        case SecOp.NonIncMethod:
+                        case SecOp.OneInc:
+                            _state.Method = meth.MethodAddress;
+                            _state.SubChannel = meth.MethodSubchannel;
+                            _state.MethodCount = meth.MethodCount;
+                            _state.IncrementOnce = meth.SecOp == SecOp.OneInc;
+                            _state.NonIncrementing = meth.SecOp == SecOp.NonIncMethod;
+                            break;
+                        case SecOp.ImmdDataMethod:
+                            Send(gpuVa, meth.MethodAddress, meth.ImmdData, meth.MethodSubchannel, true);
+                            break;
+                    }
+                }
+
+                if (_fifoClass.Nx2PendingAcquire.HasValue)
+                {
+                    return index + 1;
+                }
+            }
+
+            if (_state.MethodCount != 0)
+            {
+                _nx2SplitMethodEnd = baseGpuVa + (ulong)commandBuffer.Length * 4;
+            }
+
+            return commandBuffer.Length;
+        }
+
+        /// <summary>
+        /// Switch 2: a submission ended. A split method resumes within the submission that split it; ring
+        /// addresses repeat every frame, so a stale one could otherwise swallow the headers of a later entry.
+        /// </summary>
+        public void Nx2EndSubmission()
+        {
+            if (_nx2ParkedMethods.Count != 0 && _nx2Warnings++ < 16)
+            {
+                Nx2ParkedMethod parked = _nx2ParkedMethods[0];
+
+                Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 submission ended with parked method 0x{parked.State.Method:x} (sub {parked.State.SubChannel}, {parked.State.MethodCount} words left, resume 0x{parked.ResumeAddress:x})");
+            }
+
+            _nx2ParkedMethods.Clear();
+        }
+
+        // NVN on Switch 2 ends GPFIFO entries in the middle of a method's data and calls another command
+        // buffer (e.g. a compute dispatch) before the entry that carries the rest, which starts right where
+        // the first one ended. An entry starting anywhere else is such a call: run it with a clean method
+        // state and resume the unfinished method when the stream continues at that address.
+        private void Nx2ResolveSplitMethod(ulong entryAddress)
+        {
+            Nx2ParkedMethod? resume = null;
+
+            for (int i = 0; i < _nx2ParkedMethods.Count; i++)
+            {
+                if (_nx2ParkedMethods[i].ResumeAddress == entryAddress)
+                {
+                    resume = _nx2ParkedMethods[i];
+                    _nx2ParkedMethods.RemoveAt(i);
+                    break;
+                }
+            }
+
+            if (_state.MethodCount != 0 && entryAddress != _nx2SplitMethodEnd)
+            {
+                if (_nx2ParkedMethods.Count == Nx2MaxParkedMethods)
+                {
+                    _nx2ParkedMethods.RemoveAt(0);
+                }
+
+                _nx2ParkedMethods.Add(new Nx2ParkedMethod { State = _state, ResumeAddress = _nx2SplitMethodEnd });
+                _state.MethodCount = 0;
+            }
+
+            if (resume.HasValue && _state.MethodCount == 0)
+            {
+                _state = resume.Value.State;
+            }
+        }
+
+        // Ampere SEM_EXECUTE (method 0x1b): operation in bits 2:0 on the semaphore at SEM_ADDR_HI:SEM_ADDR_LO
+        // (methods 0x18/0x17) with payload SEM_PAYLOAD_LO (0x19).
+        private void Nx2SemaphoreExecute(uint argument)
+        {
+            ulong address = ((ulong)(_nx2FifoRegisters[0x18] & 0x1ffffff) << 32) | (_nx2FifoRegisters[0x17] & ~3u);
+            uint payload = _nx2FifoRegisters[0x19];
+            uint operation = argument & 7;
+
+            if (!MemoryManager.IsMapped(address))
+            {
+                if (_nx2Warnings++ < 16)
+                {
+                    Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 SEM_EXECUTE op {operation} on unmapped address 0x{address:X}");
+                }
+
+                return;
+            }
+
+            if (operation == 1) // RELEASE
+            {
+                MemoryManager.Write(address, payload);
+
+                if (_context.Nx2TryGetSemaphoreMirror(address, out ulong mirror))
+                {
+                    MemoryManager.Write(mirror, payload);
+                }
+
+                return;
+            }
+
+            // Acquires: checked once, the GPU thread is never blocked on them.
+            uint word = MemoryManager.Read<uint>(address);
+            bool ready = operation switch
+            {
+                0 => word == payload,
+                2 => word >= payload,
+                3 => (int)(word - payload) >= 0,
+                4 => (word & payload) != 0,
+                5 => (word & payload) == 0,
+                _ => true,
+            };
+
+            if (!ready && _nx2Warnings++ < 16)
+            {
+                Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 SEM_EXECUTE op {operation} at 0x{address:X}: 0x{word:x} vs 0x{payload:x} not met, continuing");
+            }
+        }
+
+        private readonly uint[] _nx2DataRam = new uint[TuringMacroInterpreter.DataRamSize];
+        private readonly Nx2MacroEngine _nx2Macros = new();
+
+        private Nx2Engine _nx2Threed;
+        private Nx2Engine _nx2Compute;
+
+        /// <summary>
+        /// Gets the Switch 2 engine a subchannel's methods go to. NVN binds 3D to subchannel 0 and compute
+        /// to subchannel 1; the macro data RAM belongs to the channel.
+        /// </summary>
+        /// <param name="subChannel">Subchannel index</param>
+        /// <returns>The engine, or null if the subchannel has none</returns>
+        private Nx2Engine GetNx2Engine(int subChannel)
+        {
+            return subChannel switch
+            {
+                0 => _nx2Threed ??= new Nx2Engine(_context, _channel, "3D", _nx2DataRam, _nx2Macros),
+                1 => _nx2Compute ??= new Nx2Engine(_context, _channel, "compute", _nx2DataRam, _nx2Macros),
+                _ => null,
+            };
         }
 
         /// <summary>

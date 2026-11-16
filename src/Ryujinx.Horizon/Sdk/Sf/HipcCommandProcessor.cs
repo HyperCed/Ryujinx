@@ -319,6 +319,15 @@ namespace Ryujinx.Horizon.Sdk.Sf
 
             requestValid &= rawSizeInBytes >= commandRawSize;
 
+            if (!requestValid)
+            {
+                Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.KernelIpc,
+                    $"Invalid CMIF request: pid={meta.SendPid}/{_hasInProcessIdHolder} statics={meta.SendStaticsCount}/{_inPointerBuffersCount} " +
+                    $"send={meta.SendBuffersCount}/{_inMapAliasBuffersCount} recv={meta.ReceiveBuffersCount}/{_outMapAliasBuffersCount} " +
+                    $"exch={meta.ExchangeBuffersCount} copy={meta.CopyHandlesCount}/{_inCopyHandlesCount} move={meta.MoveHandlesCount}/{_inMoveHandlesCount} " +
+                    $"raw={rawSizeInBytes}/{commandRawSize}");
+            }
+
             return requestValid ? Result.Success : HipcResult.InvalidCmifRequest;
         }
 

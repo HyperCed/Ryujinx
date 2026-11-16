@@ -1,3 +1,4 @@
+using Ryujinx.Common.Logging;
 using Ryujinx.Common;
 using Ryujinx.Common.Memory;
 using Ryujinx.Graphics.Device;
@@ -102,7 +103,20 @@ namespace Ryujinx.Graphics.Gpu.Engine.InlineToMemory
             _isLinear = (argument & 1) != 0;
 
             _offset = 0;
-            _size = (int)(BitUtils.AlignUp<uint>(state.LineLengthIn, 4) * state.LineCount);
+
+            ulong size = (ulong)BitUtils.AlignUp<uint>(state.LineLengthIn, 4) * state.LineCount;
+
+            if (size > 0x4000000)
+            {
+                Logger.Warning?.Print(LogClass.Gpu, $"Inline-to-memory copy of 0x{size:X} bytes ({state.LineLengthIn} x {state.LineCount}) ignored.");
+
+                _size = 0;
+                _finished = true;
+
+                return;
+            }
+
+            _size = (int)size;
 
             int count = _size / 4;
 
