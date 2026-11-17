@@ -80,6 +80,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
         public SpirvDelegates Delegates { get; }
 
+        /// <summary>
+        /// Function variable counting loop iterations when loops are bounded, otherwise null.
+        /// </summary>
+        public Instruction LoopCounter { get; set; }
+
         public bool IsMainFunction { get; private set; }
         public bool MayHaveReturned { get; set; }
         public bool WasNonUniformAccessDeclared { get; set; }

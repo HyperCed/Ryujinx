@@ -172,6 +172,18 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
             Declarations.DeclareLocals(context, function);
 
+            context.LoopCounter = null;
+
+            if (context.Definitions.BoundLoops)
+            {
+                SpvInstruction counterPointerType = context.TypePointer(StorageClass.Function, context.TypeU32());
+                SpvInstruction counter = context.Variable(counterPointerType, StorageClass.Function);
+
+                context.AddLocalVariable(counter);
+                context.Store(counter, context.Constant(context.TypeU32(), 0));
+                context.LoopCounter = counter;
+            }
+
             Generate(context, function.MainBlock);
 
             // Functions must always end with a return.
@@ -303,6 +315,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             }
         }
 
+        /// <summary>
+        /// Loop iterations a function with bounded loops may run (see ShaderDefinitions.BoundLoops).
+        /// </summary>
+        private const int MaxLoopIterations = 1 << 16;
+
         private static void Generate(CodeGenContext context, AstBlock block)
         {
             AstBlockVisitor visitor = new(block);
@@ -363,6 +380,19 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                         context.AddLabel(continueTarget);
 
                         SpvInstruction condition = context.Get(AggregateType.Bool, e.Block.Condition);
+
+                        if (context.LoopCounter != null)
+                        {
+                            // Leave the loop once the function has looped MaxLoopIterations times in all.
+                            SpvInstruction count = context.Load(context.TypeU32(), context.LoopCounter);
+                            SpvInstruction next = context.IAdd(context.TypeU32(), count, context.Constant(context.TypeU32(), 1));
+
+                            context.Store(context.LoopCounter, next);
+
+                            SpvInstruction withinBound = context.ULessThan(context.TypeBool(), next, context.Constant(context.TypeU32(), MaxLoopIterations));
+
+                            condition = context.LogicalAnd(context.TypeBool(), condition, withinBound);
+                        }
 
                         context.BranchConditional(condition, loopTarget, context.GetNextLabel(mergeBlock));
                     }

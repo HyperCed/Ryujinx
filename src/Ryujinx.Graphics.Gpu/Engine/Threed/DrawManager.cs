@@ -123,6 +123,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// <param name="drawFirstVertex">Index of the first vertex used on the draw</param>
         /// <param name="drawVertexCount">Number of vertices used on the draw</param>
         private int _nx2DrawTraces;
+        private int _nx2OversizedDraws;
 
         private void DrawEnd(ThreedClass engine, int firstIndex, int indexCount, int drawFirstVertex, int drawVertexCount)
         {
@@ -145,6 +146,21 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 {
                     _context.Renderer.Pipeline.EndHostConditionalRendering();
                 }
+
+                return;
+            }
+
+            // Switch 2: a count this large is wrong data (GPU-written parameters read stale), not a draw;
+            // running it would keep the GPU busy for seconds, which on a Mac also stalls the screen.
+            if (_context.Nx2Ampere && ((uint)indexCount > 1u << 24 || (uint)drawVertexCount > 1u << 24))
+            {
+                if (_nx2OversizedDraws++ < 16)
+                {
+                    Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                        $"Switch 2 draw skipped: {indexCount} indices, {drawVertexCount} vertices");
+                }
+
+                _drawState.DrawIndexed = false;
 
                 return;
             }

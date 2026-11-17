@@ -1,7 +1,12 @@
 using Ryujinx.Common.Logging;
+using Ryujinx.HLE.HOS.Kernel;
+using Ryujinx.HLE.HOS.Kernel.Memory;
+using Ryujinx.HLE.HOS.Kernel.Process;
+using Ryujinx.Horizon.Common;
 using Ryujinx.HLE.HOS.Kernel.Threading;
 using Ryujinx.HLE.HOS.Services.Nv.NvDrvServices;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Ryujinx.HLE.HOS.Services.Nx2
 {
@@ -256,24 +261,145 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
         }
 
         [CommandTipc(214)]
-        // CreateSparseRegion: GPU-only memory [start, last] (words 3-6), job slot in word 11.
+        // CreateSparseRegion: GPU-only memory [start, last] (words 1-4), flags in word 5 (0x200: sparse, the
+        // game maps its own memory into it with 216), job slot in word 9. The graphics server backs GPU-only
+        // regions itself: the game never maps anything there but renders into them (Mario Kart World keeps
+        // its render targets in 250 MiB regions at 0x81_0000_0000). They get memory in the application's
+        // TLS/IO region, mapped for the GPU at their address, up to MaxBackedRegionSize each.
         public ResultCode CreateSparseRegion(ServiceCtx context)
         {
             uint[] w = Nx2Tipc.Words(context);
+            ulong start = Nx2Tipc.Pair(w, 1);
+            ulong last = Nx2Tipc.Pair(w, 3);
+            uint flags = w[5];
+            ulong size = last + 1 - start;
 
-            Logger.Info?.Print(LogClass.ServiceNv, $"(STUBBED) nx2:gpu sparse region [{Nx2Tipc.Pair(w, 1):x}, {Nx2Tipc.Pair(w, 3):x}]");
+            lock (_regions)
+            {
+                // A region created again from the same start replaces the earlier one (Mario Kart World grows
+                // some this way without 215).
+                DestroyRegion(context, start);
+
+                if ((flags & SparseRegionFlag) == 0 && last > start && size % KPageTableBase.PageSize == 0 && size <= MaxBackedRegionSize)
+                {
+                    BackRegion(context, start, size);
+                }
+                else
+                {
+                    Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 214 {((flags & SparseRegionFlag) != 0 ? "sparse" : "GPU-only")} region [{start:x}, {last:x}] ({size >> 20} MiB, flags 0x{flags:x}) not backed");
+                }
+            }
+
             EventFor(context, w[9]).WritableEvent.Signal();
 
             return ResultCode.Success;
         }
 
+        private const uint SparseRegionFlag = 0x200;
+        private const ulong MaxBackedRegionSize = 512UL << 20;
+
+        // System memory left to the services when backing GPU-only regions.
+        private const ulong ServicePoolReservePages = (256UL << 20) / KPageTableBase.PageSize;
+
+        private readonly Dictionary<ulong, (ulong CpuAddress, ulong Size)> _regions = [];
+
+        private static KProcess ApplicationProcess(ServiceCtx context)
+        {
+            return context.Device.Processes.ActiveApplication is { } application &&
+                   context.Device.System.KernelContext.Processes.TryGetValue(application.ProcessId, out KProcess process)
+                ? process
+                : null;
+        }
+
+        private void BackRegion(ServiceCtx context, ulong start, ulong size)
+        {
+            KProcess process = ApplicationProcess(context);
+
+            if (process == null)
+            {
+                return;
+            }
+
+            KPageTableBase pageTable = process.MemoryManager;
+            ulong pages = size / KPageTableBase.PageSize;
+
+            // The graphics server's own memory (the system pool), not the application's: the title sizes its
+            // allocations to its pool and fails when that runs short. Contiguous, so it maps in one go.
+            KernelContext kernel = context.Device.System.KernelContext;
+            KMemoryRegionManager pool = kernel.MemoryManager.MemoryRegions[(int)MemoryRegion.Service];
+
+            if (pool.GetFreePages() < pages + ServicePoolReservePages)
+            {
+                Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 214 GPU-only region [{start:x}, +{size >> 20} MiB] not backed: {pool.GetFreePages() * KPageTableBase.PageSize >> 20} MiB left in the system pool (use --dram-size MemoryConfiguration16GiB)");
+
+                return;
+            }
+
+            ulong physicalAddress = pool.AllocatePagesContiguous(kernel, pages, backwards: true);
+
+            if (physicalAddress == 0)
+            {
+                Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 214 GPU-only region [{start:x}, +{size >> 20} MiB] not backed: no contiguous system memory");
+
+                return;
+            }
+
+            Result result = pageTable.MapPages(
+                pages,
+                0x10000,
+                physicalAddress,
+                true,
+                pageTable.TlsIoRegionStart,
+                (pageTable.TlsIoRegionEnd - pageTable.TlsIoRegionStart) / KPageTableBase.PageSize,
+                MemoryState.Io,
+                KMemoryPermission.ReadAndWrite,
+                out ulong cpuAddress);
+
+            // The mapping holds its own reference to the pages.
+            kernel.MemoryManager.DecrementPagesReferenceCount(physicalAddress, pages);
+
+            if (result != Result.Success)
+            {
+                Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 214 GPU-only region [{start:x}, +{size >> 20} MiB] could not be backed: {result} (TLS/IO region [{pageTable.TlsIoRegionStart:x}, {pageTable.TlsIoRegionEnd:x}), alias [{pageTable.AliasRegionStart:x}, {pageTable.AliasRegionEnd:x}), heap [{pageTable.HeapRegionStart:x}, {pageTable.HeapRegionEnd:x}))");
+
+                return;
+            }
+
+            _regions[start] = (cpuAddress, size);
+            Nx2GpuMemoryRegistry.MapAt(start, cpuAddress, size);
+
+            Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 214 GPU-only region [{start:x}, +{size >> 20} MiB] backed at 0x{cpuAddress:x}");
+        }
+
+        private void DestroyRegion(ServiceCtx context, ulong start)
+        {
+            if (!_regions.Remove(start, out (ulong CpuAddress, ulong Size) region))
+            {
+                return;
+            }
+
+            Nx2GpuMemoryRegistry.Unmap(start, region.Size);
+
+            KProcess process = ApplicationProcess(context);
+            Result result = process?.MemoryManager.UnmapNoAttributeIfStateEquals(region.CpuAddress, region.Size, MemoryState.Io) ?? Result.Success;
+
+            if (result != Result.Success)
+            {
+                Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu GPU-only region at {start:x}: unmapping its memory failed: {result}");
+            }
+        }
+
         [CommandTipc(215)]
-        // DestroySparseRegion: words 3-6 the range, job slot in word 8.
+        // DestroySparseRegion: words 1-4 the range, job slot in word 6.
         public ResultCode DestroySparseRegion(ServiceCtx context)
         {
             uint[] w = Nx2Tipc.Words(context);
 
-            Logger.Debug?.Print(LogClass.ServiceNv, $"(STUBBED) nx2:gpu sparse region [{Nx2Tipc.Pair(w, 1):x}, {Nx2Tipc.Pair(w, 3):x}]");
+            lock (_regions)
+            {
+                DestroyRegion(context, Nx2Tipc.Pair(w, 1));
+            }
+
             EventFor(context, w[6]).WritableEvent.Signal();
 
             return ResultCode.Success;

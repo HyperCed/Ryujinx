@@ -227,6 +227,20 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
                 return false;
             }
 
+            // A grid past the host limits (or absurdly large) is wrong data, not work: running it would
+            // keep the GPU busy for seconds, which on a Mac also stalls the screen.
+            if ((uint)gridX > 65535 || (uint)gridY > 65535 || (uint)gridZ > 65535 || (long)gridX * gridY * gridZ > 1L << 22 ||
+                blockX * blockY * blockZ > 1024)
+            {
+                if (_nx2OversizedDispatches++ < 16)
+                {
+                    Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                        $"Switch 2 compute dispatch skipped: grid {gridX}x{gridY}x{gridZ}, block {blockX}x{blockY}x{blockZ}, program 0x{qmd[48] | ((ulong)(qmd[49] & 0x1ffff) << 32):X}");
+                }
+
+                return false;
+            }
+
             MemoryManager memoryManager = _channel.MemoryManager;
 
             _context.Nx2PerformAllDeferredDraws();
@@ -256,10 +270,14 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
 
             int samplerPoolMaximumId = _state.State.SetTexSamplerPoolCMaximumIndex;
 
+            int nx2TextureBufferIndex = _state.State.SetBindlessTextureConstantBufferSlotSelect != 0
+                ? (int)_state.State.SetBindlessTextureConstantBufferSlotSelect
+                : Threed.StateUpdater.Nx2TextureBufferIndex;
+
             GpuChannelPoolState poolState = new(
                 texturePoolGpuVa,
                 _state.State.SetTexHeaderPoolCMaximumIndex,
-                _state.State.SetBindlessTextureConstantBufferSlotSelect);
+                nx2TextureBufferIndex);
 
             GpuChannelComputeState computeState = new(blockX, blockY, blockZ, localMemorySize, sharedMemorySize, _channel.BufferManager.HasUnalignedStorageBuffers);
 
@@ -286,7 +304,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
 
             _channel.TextureManager.SetComputeSamplerPool(samplerPoolGpuVa, _state.State.SetTexSamplerPoolCMaximumIndex, SamplerIndex.Independently);
             _channel.TextureManager.SetComputeTexturePool(texturePoolGpuVa, _state.State.SetTexHeaderPoolCMaximumIndex);
-            _channel.TextureManager.SetComputeTextureBufferIndex(_state.State.SetBindlessTextureConstantBufferSlotSelect);
+            _channel.TextureManager.SetComputeTextureBufferIndex(nx2TextureBufferIndex);
 
             ShaderProgramInfo info = cs.Shaders[0].Info;
 
@@ -318,5 +336,6 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
         }
 
         private readonly HashSet<ulong> _nx2RejectedPrograms = [];
+        private int _nx2OversizedDispatches;
     }
 }

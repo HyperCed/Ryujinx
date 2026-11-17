@@ -2376,7 +2376,8 @@ namespace Ryujinx.Ava.UI.ViewModels
                         MemoryConfiguration.MemoryConfiguration6GiBAppletDev =>
                         LocaleKeys.SettingsTabSystemDramSize6GiB,
                     MemoryConfiguration.MemoryConfiguration8GiB => LocaleKeys.SettingsTabSystemDramSize8GiB,
-                    MemoryConfiguration.MemoryConfiguration12GiB => LocaleKeys.SettingsTabSystemDramSize12GiB,
+                    MemoryConfiguration.MemoryConfiguration12GiB or
+                        MemoryConfiguration.MemoryConfiguration16GiB => LocaleKeys.SettingsTabSystemDramSize12GiB,
                     _ => LocaleKeys.SettingsTabSystemDramSize4GiB,
                 };
 

@@ -625,6 +625,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         /// </summary>
         internal static readonly bool Nx2Maxwell = Environment.GetEnvironmentVariable("RYUJINX_NX2_MAXWELL") == "1";
 
+        /// <summary>
+        /// RYUJINX_NX2_COMPUTE=1 (with RYUJINX_NX2_MAXWELL=1): QMDs run their programs. Off by default: a
+        /// compute program running on wrong data can hang the GPU, which on a Mac also stalls the screen
+        /// until WindowServer is killed.
+        /// </summary>
+        internal static readonly bool Nx2Compute = Nx2Maxwell && Environment.GetEnvironmentVariable("RYUJINX_NX2_COMPUTE") == "1";
+
         private Nx2Engine CreateNx2Threed()
         {
             Nx2Engine engine = new(_context, _channel, "3D", _nx2DataRam, _nx2Macros);
@@ -632,7 +639,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             if (Nx2Maxwell)
             {
                 engine.MethodWritten = ForwardToMaxwell3D;
-                engine.Dispatch = _computeClass.Nx2Dispatch;
+                engine.Dispatch = Nx2Compute ? _computeClass.Nx2Dispatch : null;
             }
 
             return engine;
@@ -740,7 +747,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                     _computeClass.Write((int)method * 4, (int)value);
                 };
 
-                engine.Dispatch = _computeClass.Nx2Dispatch;
+                engine.Dispatch = Nx2Compute ? _computeClass.Nx2Dispatch : null;
             }
 
             return engine;

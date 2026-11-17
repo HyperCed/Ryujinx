@@ -30,7 +30,8 @@ namespace Ryujinx.HLE.HOS.Kernel.Common
                 MemoryArrange.MemoryArrange4GiBAppletDev => 2048 * MiB,
                 MemoryArrange.MemoryArrange6GiB => 4916 * MiB,
                 MemoryArrange.MemoryArrange8GiB => 6964 * MiB,
-                MemoryArrange.MemoryArrange12GiB => 11060 * MiB,
+                MemoryArrange.MemoryArrange12GiB or
+                MemoryArrange.MemoryArrange16GiB => 11060 * MiB,
                 _ => throw new ArgumentException($"Invalid memory arrange \"{arrange}\"."),
             };
         }
@@ -45,7 +46,8 @@ namespace Ryujinx.HLE.HOS.Kernel.Common
                 MemoryArrange.MemoryArrange6GiB => 562 * MiB,
                 MemoryArrange.MemoryArrange6GiBAppletDev => 2193 * MiB,
                 MemoryArrange.MemoryArrange8GiB or
-                MemoryArrange.MemoryArrange12GiB => 562 * MiB,
+                MemoryArrange.MemoryArrange12GiB or
+                MemoryArrange.MemoryArrange16GiB => 562 * MiB,
                 _ => throw new ArgumentException($"Invalid memory arrange \"{arrange}\"."),
             };
         }
@@ -74,6 +76,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Common
                 MemorySize.MemorySize6GiB => 6 * GiB,
                 MemorySize.MemorySize8GiB => 8 * GiB,
                 MemorySize.MemorySize12GiB => 12 * GiB,
+                MemorySize.MemorySize16GiB => 16 * GiB,
                 _ => throw new ArgumentException($"Invalid memory size \"{size}\"."),
             };
         }

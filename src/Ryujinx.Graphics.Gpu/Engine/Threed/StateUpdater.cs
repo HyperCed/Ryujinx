@@ -982,7 +982,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             PoolState texturePool = _state.State.TexturePoolState;
 
             _channel.TextureManager.SetGraphicsTexturePool(texturePool.Address.Pack(), texturePool.MaximumId);
-            _channel.TextureManager.SetGraphicsTextureBufferIndex((int)_state.State.TextureBufferIndex);
+            _channel.TextureManager.SetGraphicsTextureBufferIndex(TextureBufferIndex);
 
             _currentSpecState.SetPoolState(GetPoolState());
         }
@@ -1487,6 +1487,19 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
         private readonly System.Collections.Generic.HashSet<(ulong, int, int, uint)> _nx2TracedTargets = [];
 
+        /// <summary>
+        /// The constant buffer holding texture handles. Switch 2 programs lowered to Maxwell code read
+        /// them from NVN's texture bank 2 (the lowering's required texture buffer) while the register is 0.
+        /// </summary>
+        private int TextureBufferIndex => _context.Nx2Ampere && _state.State.TextureBufferIndex == 0
+            ? Nx2TextureBufferIndex
+            : (int)_state.State.TextureBufferIndex;
+
+        /// <summary>
+        /// NVN's constant buffer for texture handles.
+        /// </summary>
+        internal const int Nx2TextureBufferIndex = 2;
+
         private CachedShaderProgram Nx2GetGraphicsShader(ShaderCache shaderCache, int samplerPoolMaximumId, ShaderAddresses addresses)
         {
             Nx2DumpPrograms(addresses);
@@ -1698,7 +1711,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             return new GpuChannelPoolState(
                 _state.State.TexturePoolState.Address.Pack(),
                 _state.State.TexturePoolState.MaximumId,
-                (int)_state.State.TextureBufferIndex);
+                TextureBufferIndex);
         }
 
         /// <summary>

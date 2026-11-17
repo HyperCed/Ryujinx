@@ -9,6 +9,8 @@ namespace Ryujinx.Graphics.Vulkan
 {
     class SyncManager
     {
+        private static readonly bool _abortOnHang = System.Environment.GetEnvironmentVariable("RYUJINX_GPU_HANG_ABORT") == "1";
+
         private class SyncHandle
         {
             public ulong ID;
@@ -156,6 +158,14 @@ namespace Ryujinx.Graphics.Vulkan
                     if (!signaled)
                     {
                         Logger.Error?.PrintMsg(LogClass.Gpu, $"VK Sync Object {result.ID} failed to signal within 1000ms. Continuing...");
+
+                        // RYUJINX_GPU_HANG_ABORT=1: stop at once rather than keep feeding a hung GPU. On a Mac the
+                        // GPU also composites the screen, and a long hang gets WindowServer killed.
+                        if (_abortOnHang)
+                        {
+                            Logger.Flush();
+                            System.Environment.FailFast($"GPU hang: sync object {result.ID} not signalled within 1000 ms (RYUJINX_GPU_HANG_ABORT)");
+                        }
                     }
                     else
                     {
