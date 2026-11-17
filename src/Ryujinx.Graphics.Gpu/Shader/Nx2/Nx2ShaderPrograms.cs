@@ -46,6 +46,30 @@ namespace Ryujinx.Graphics.Gpu.Shader.Nx2
         private static readonly ConcurrentDictionary<(ulong Key, ulong Address, int Stage), object> _lowered = new();
 
         /// <summary>
+        /// Address the empty fragment program stands at (no guest memory is read there).
+        /// </summary>
+        public const ulong EmptyFragmentAddress = 0xffff_ffff_0000UL;
+
+        /// <summary>
+        /// A fragment program without outputs, for pipelines the game draws without one (depth-only
+        /// passes): Maxwell always has one, and MoltenVK crashes creating pipelines without it.
+        /// </summary>
+        public static readonly Nx2ShaderProgram EmptyFragment = CreateEmptyFragment();
+
+        private static Nx2ShaderProgram CreateEmptyFragment()
+        {
+            byte[] header = new byte[Nx2LoweredCode.HeaderSize];
+
+            // SPH type 2 (pixel), version 3, shader type 5 (pixel); no outputs.
+            BitConverter.TryWriteBytes(header, 2 | (3 << 5) | (5 << 10));
+
+            Nx2LoweredProgram lowered = new();
+            lowered.Instructions.Add(0xe30000000007000fUL); // EXIT
+
+            return new Nx2ShaderProgram([], Nx2LoweredCode.Build(header, lowered));
+        }
+
+        /// <summary>
         /// Gets the program at <paramref name="address"/>, lowered for the given stage.
         /// </summary>
         /// <param name="memoryManager">GPU memory of the channel</param>
@@ -62,6 +86,11 @@ namespace Ryujinx.Graphics.Gpu.Shader.Nx2
             if (code == null)
             {
                 throw new Nx2ShaderException(error);
+            }
+
+            if (compute)
+            {
+                Nx2NativeProgram.Dump(memoryManager, address, 0, "cs", code);
             }
 
             object entry = _lowered.GetOrAdd((Nx2NativeProgram.Key(code), address, stageIndex), _ => Lower(memoryManager, address, headerSize, stageIndex, code));

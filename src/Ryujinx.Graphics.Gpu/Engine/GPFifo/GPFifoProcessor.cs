@@ -81,6 +81,14 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             _i2mClass = new InlineToMemoryClass(context, channel);
             _2dClass = new TwodClass(channel);
             _dmaClass = new DmaClass(context, channel, _3dClass);
+
+            if (Nx2Maxwell)
+            {
+                lock (context.Nx2ThreedEngines)
+                {
+                    context.Nx2ThreedEngines.Add(new WeakReference<ThreedClass>(_3dClass));
+                }
+            }
         }
 
         /// <summary>
@@ -624,6 +632,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             if (Nx2Maxwell)
             {
                 engine.MethodWritten = ForwardToMaxwell3D;
+                engine.Dispatch = _computeClass.Nx2Dispatch;
             }
 
             return engine;
@@ -714,12 +723,35 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         public long Nx2Suspensions => System.Threading.Interlocked.Read(ref _nx2Suspensions);
         private int _nx2UnmappedUbo;
 
+        private Nx2Engine CreateNx2Compute()
+        {
+            Nx2Engine engine = new(_context, _channel, "compute", _nx2DataRam, _nx2Macros);
+
+            if (Nx2Maxwell)
+            {
+                // The compute class state (texture and sampler pools, bindless constant buffer) for dispatches.
+                engine.MethodWritten = (method, value) =>
+                {
+                    if (method is (>= 0x45 and <= 0x48) or (>= 0x60 and <= 0x6d) or (>= 0xad and <= 0xb0) or (>= 0x6c0 and <= 0x6c3) or >= 0xe00)
+                    {
+                        return;
+                    }
+
+                    _computeClass.Write((int)method * 4, (int)value);
+                };
+
+                engine.Dispatch = _computeClass.Nx2Dispatch;
+            }
+
+            return engine;
+        }
+
         private Nx2Engine GetNx2Engine(int subChannel)
         {
             return subChannel switch
             {
                 0 => _nx2Threed ??= CreateNx2Threed(),
-                1 => _nx2Compute ??= new Nx2Engine(_context, _channel, "compute", _nx2DataRam, _nx2Macros),
+                1 => _nx2Compute ??= CreateNx2Compute(),
                 _ => null,
             };
         }

@@ -221,6 +221,15 @@ namespace Ryujinx.Graphics.Gpu.Shader
             GpuAccessor gpuAccessor = new(_context, channel, gpuAccessorState);
             gpuAccessor.InitializeReservedCounts(tfEnabled: false, vertexAsCompute: false);
 
+            // Switch 2 programs are lowered to Maxwell code, which the translator reads in their place.
+            Nx2.Nx2ShaderProgram nx2Program = _context.Nx2Ampere ? Nx2.Nx2ShaderPrograms.Get(channel.MemoryManager, gpuVa, -1) : null;
+
+            if (nx2Program != null)
+            {
+                gpuAccessor.Nx2SetCode(gpuVa, nx2Program.LoweredCode);
+                cachedGuestCode = nx2Program.NativeCode;
+            }
+
             TranslatorContext translatorContext = DecodeComputeShader(gpuAccessor, _context.Capabilities.Api, gpuVa);
             TranslatedShader translatedShader = TranslateShader(_dumper, channel, translatorContext, cachedGuestCode, asCompute: false);
 
@@ -231,7 +240,12 @@ namespace Ryujinx.Graphics.Gpu.Shader
             cpShader = new CachedShaderProgram(hostProgram, specState, translatedShader.Shader);
 
             _computeShaderCache.Add(cpShader);
-            EnqueueProgramToSave(cpShader, hostProgram, shaderSourcesArray);
+
+            if (nx2Program == null)
+            {
+                EnqueueProgramToSave(cpShader, hostProgram, shaderSourcesArray);
+            }
+
             _cpPrograms[gpuVa] = cpShader;
 
             return cpShader;
@@ -344,6 +358,12 @@ namespace Ryujinx.Graphics.Gpu.Shader
             for (int stageIndex = Constants.ShaderStages - 1; stageIndex >= 0; stageIndex--)
             {
                 ulong gpuVa = addressesSpan[stageIndex + 1];
+
+                if (gpuVa == 0 && stageIndex == Constants.ShaderStages - 1 && nx2Programs != null)
+                {
+                    gpuVa = Nx2.Nx2ShaderPrograms.EmptyFragmentAddress;
+                    nx2Programs[stageIndex] = Nx2.Nx2ShaderPrograms.EmptyFragment;
+                }
 
                 if (gpuVa != 0)
                 {
@@ -492,11 +512,18 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// Captures and lowers the Switch 2 programs of a graphics pipeline.
         /// </summary>
         /// <exception cref="Nx2.Nx2ShaderException">A program cannot be lowered</exception>
+        private static readonly bool _nx2NoTessellation = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_TESSELLATION") == "1";
+
         private static Nx2.Nx2ShaderProgram[] Nx2GetPrograms(GpuChannel channel, ShaderAddresses addresses)
         {
             if (addresses.VertexA != 0)
             {
                 throw new Nx2.Nx2ShaderException("Switch 2 pipeline with a vertex A program");
+            }
+
+            if (_nx2NoTessellation && (addresses.TessControl != 0 || addresses.TessEvaluation != 0))
+            {
+                throw new Nx2.Nx2ShaderException("tessellation disabled (RYUJINX_NX2_NO_TESSELLATION)");
             }
 
             ReadOnlySpan<ulong> addressesSpan = addresses.AsSpan();

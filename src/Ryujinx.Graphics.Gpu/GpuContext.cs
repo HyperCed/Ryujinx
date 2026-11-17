@@ -52,6 +52,31 @@ namespace Ryujinx.Graphics.Gpu
         /// </summary>
         internal Engine.Nx2.Nx2QmdScheduler Nx2Qmd { get; } = new();
 
+        /// <summary>
+        /// The 3D engines of the Switch 2 channels (Maxwell forwarding mode). A QMD can be dispatched
+        /// while another channel still holds deferred (instanced) draws, which run later with the host
+        /// pipeline state as it is then: they are performed before the compute program is bound.
+        /// </summary>
+        internal System.Collections.Generic.List<WeakReference<Engine.Threed.ThreedClass>> Nx2ThreedEngines { get; } = [];
+
+        internal void Nx2PerformAllDeferredDraws()
+        {
+            lock (Nx2ThreedEngines)
+            {
+                for (int i = Nx2ThreedEngines.Count - 1; i >= 0; i--)
+                {
+                    if (Nx2ThreedEngines[i].TryGetTarget(out Engine.Threed.ThreedClass engine))
+                    {
+                        engine.PerformDeferredDraws();
+                    }
+                    else
+                    {
+                        Nx2ThreedEngines.RemoveAt(i);
+                    }
+                }
+            }
+        }
+
 
         private readonly System.Collections.Generic.HashSet<ulong> _nx2SemaphoreRegions = [];
 

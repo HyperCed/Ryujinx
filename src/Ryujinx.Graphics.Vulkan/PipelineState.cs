@@ -378,6 +378,8 @@ namespace Ryujinx.Graphics.Vulkan
             return pipeline;
         }
 
+        private static readonly bool _pipelineTrace = System.Environment.GetEnvironmentVariable("RYUJINX_VK_PIPELINE_TRACE") == "1";
+
         public unsafe Auto<DisposablePipeline> CreateGraphicsPipeline(
             VulkanRenderer gd,
             Device device,
@@ -642,6 +644,24 @@ namespace Ryujinx.Graphics.Vulkan
                     Layout = PipelineLayout,
                     RenderPass = renderPass,
                 };
+
+                if (_pipelineTrace)
+                {
+                    System.Text.StringBuilder trace = new($"[vk-pipeline] program #{program.GetHashCode():x} compute {program.IsCompute} stage0 {Stages[0].Stage} stages {StagesCount} topology {Topology} patch points {PatchControlPoints} attributes {VertexAttributeDescriptionsCount} bindings {VertexBindingDescriptionsCount} colors {ColorBlendAttachmentStateCount}:");
+
+                    for (int i = 0; i < VertexAttributeDescriptionsCount; i++)
+                    {
+                        trace.Append($" a{Internal.VertexAttributeDescriptions[i].Location}={Internal.VertexAttributeDescriptions[i].Format}@{Internal.VertexAttributeDescriptions[i].Binding}+{Internal.VertexAttributeDescriptions[i].Offset}");
+                    }
+
+                    for (int i = 0; i < VertexBindingDescriptionsCount; i++)
+                    {
+                        trace.Append($" b{Internal.VertexBindingDescriptions[i].Binding}={Internal.VertexBindingDescriptions[i].Stride}/{Internal.VertexBindingDescriptions[i].InputRate}");
+                    }
+
+                    System.Console.Error.WriteLine(trace.ToString());
+                    System.Console.Error.Flush();
+                }
 
                 Result result = gd.Api.CreateGraphicsPipelines(device, cache, 1, &pipelineCreateInfo, null, &pipelineHandle);
 

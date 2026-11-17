@@ -498,6 +498,12 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             if (_prevChannelProcessor != processor)
             {
                 _prevChannelProcessor = processor;
+
+                // The host pipeline state is shared: rebind this channel's when it draws or dispatches.
+                if (GPFifoProcessor.Nx2Maxwell)
+                {
+                    processor.ForceAllDirty();
+                }
             }
 
             if (_nx2Dump != null)

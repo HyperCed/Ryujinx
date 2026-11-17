@@ -205,5 +205,116 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
 
             _3dEngine.ForceShaderUpdate();
         }
+
+        /// <summary>
+        /// Runs the program of a Switch 2 QMD (V03_00, 64 words): the scheduler calls this once the QMD
+        /// is scheduled and its dependencies are met. The texture and sampler pools come from this class
+        /// state, which the Switch 2 compute methods also write.
+        /// </summary>
+        /// <param name="qmd">QMD words</param>
+        /// <returns>True if the program ran</returns>
+        public bool Nx2Dispatch(uint[] qmd)
+        {
+            int gridX = (int)qmd[12];
+            int gridY = (int)(qmd[13] & 0xffff);
+            int gridZ = (int)(qmd[14] & 0xffff);
+            int blockX = (int)(qmd[18] >> 16);
+            int blockY = (int)(qmd[19] & 0xffff);
+            int blockZ = (int)(qmd[19] >> 16);
+
+            if (gridX == 0 || gridY == 0 || gridZ == 0 || blockX == 0 || blockY == 0 || blockZ == 0)
+            {
+                return false;
+            }
+
+            MemoryManager memoryManager = _channel.MemoryManager;
+
+            _context.Nx2PerformAllDeferredDraws();
+            _3dEngine.FlushUboDirty();
+
+            ulong shaderGpuVa = qmd[48] | ((ulong)(qmd[49] & 0x1ffff) << 32);
+            int localMemorySize = (int)((qmd[23] & 0xffffff) + (qmd[50] & 0xffffff));
+            int sharedMemorySize = Math.Min((int)(qmd[17] & 0x3ffff), _context.Capabilities.MaximumComputeSharedMemorySize);
+            uint constantBufferMask = qmd[20] & 0xff;
+
+            for (int index = 0; index < Constants.TotalCpUniformBuffers && index < 8; index++)
+            {
+                if ((constantBufferMask & (1u << index)) == 0)
+                {
+                    continue;
+                }
+
+                uint high = qmd[33 + index * 2];
+                ulong gpuVa = qmd[32 + index * 2] | ((ulong)(high & 0xff) << 32);
+                ulong size = ((high >> 19) & 0x1fff) << 4;
+
+                _channel.BufferManager.SetComputeUniformBuffer(index, gpuVa, size);
+            }
+
+            ulong samplerPoolGpuVa = ((ulong)_state.State.SetTexSamplerPoolAOffsetUpper << 32) | _state.State.SetTexSamplerPoolB;
+            ulong texturePoolGpuVa = ((ulong)_state.State.SetTexHeaderPoolAOffsetUpper << 32) | _state.State.SetTexHeaderPoolB;
+
+            int samplerPoolMaximumId = _state.State.SetTexSamplerPoolCMaximumIndex;
+
+            GpuChannelPoolState poolState = new(
+                texturePoolGpuVa,
+                _state.State.SetTexHeaderPoolCMaximumIndex,
+                _state.State.SetBindlessTextureConstantBufferSlotSelect);
+
+            GpuChannelComputeState computeState = new(blockX, blockY, blockZ, localMemorySize, sharedMemorySize, _channel.BufferManager.HasUnalignedStorageBuffers);
+
+            CachedShaderProgram cs;
+
+            try
+            {
+                cs = memoryManager.Physical.ShaderCache.GetComputeShader(_channel, samplerPoolMaximumId, poolState, computeState, shaderGpuVa);
+            }
+            catch (Exception exception)
+            {
+                lock (_nx2RejectedPrograms)
+                {
+                    if (_nx2RejectedPrograms.Add(shaderGpuVa) && _nx2RejectedPrograms.Count <= 32)
+                    {
+                        Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 compute program 0x{shaderGpuVa:X} rejected: {exception.GetType().Name}: {exception.Message}");
+                    }
+                }
+
+                return false;
+            }
+
+            _context.Renderer.Pipeline.SetProgram(cs.HostProgram);
+
+            _channel.TextureManager.SetComputeSamplerPool(samplerPoolGpuVa, _state.State.SetTexSamplerPoolCMaximumIndex, SamplerIndex.Independently);
+            _channel.TextureManager.SetComputeTexturePool(texturePoolGpuVa, _state.State.SetTexHeaderPoolCMaximumIndex);
+            _channel.TextureManager.SetComputeTextureBufferIndex(_state.State.SetBindlessTextureConstantBufferSlotSelect);
+
+            ShaderProgramInfo info = cs.Shaders[0].Info;
+
+            for (int index = 0; index < info.SBuffers.Count; index++)
+            {
+                BufferDescriptor sb = info.SBuffers[index];
+
+                ulong sbDescAddress = _channel.BufferManager.GetComputeUniformBufferAddress(sb.SbCbSlot);
+                sbDescAddress += (ulong)sb.SbCbOffset * 4;
+
+                SbDescriptor sbDescriptor = _channel.MemoryManager.Physical.Read<SbDescriptor>(sbDescAddress);
+                uint size = (uint)_channel.MemoryManager.GetMappedSize(sbDescriptor.PackAddress(), Constants.MaxUnknownStorageSize);
+
+                _channel.BufferManager.SetComputeStorageBuffer(sb.Slot, sbDescriptor.PackAddress(), size, sb.Flags);
+            }
+
+            _channel.BufferManager.SetComputeBufferBindings(cs.Bindings);
+            _channel.TextureManager.SetComputeBindings(cs.Bindings);
+            _channel.TextureManager.CommitComputeBindings(cs.SpecializationState);
+            _channel.BufferManager.CommitComputeBindings();
+
+            _context.Renderer.Pipeline.DispatchCompute(gridX, gridY, gridZ);
+
+            _3dEngine.ForceShaderUpdate();
+
+            return true;
+        }
+
+        private readonly HashSet<ulong> _nx2RejectedPrograms = [];
     }
 }

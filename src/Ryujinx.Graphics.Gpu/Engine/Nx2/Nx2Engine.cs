@@ -62,6 +62,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
         /// </summary>
         public System.Action<uint, uint> MethodWritten { get; set; }
 
+        /// <summary>
+        /// Runs the program of a QMD (64 words) with a non-empty grid; returns false if it can't.
+        /// </summary>
+        public System.Func<uint[], bool> Dispatch { get; set; }
+
         public Nx2MacroEngine Macros { get; }
 
         public Nx2Engine(GpuContext context, GpuChannel channel, string name, uint[] dataRam, Nx2MacroEngine macros)
@@ -222,8 +227,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
 
                     return true;
                 },
-                // No compute program runs yet; the QMD still completes.
-                descriptor => false);
+                // Without a dispatcher (RYUJINX_NX2_MAXWELL unset) no program runs; the QMD still completes.
+                descriptor => Dispatch?.Invoke(descriptor) ?? false);
 
             if (error != null && error != "native shader dispatch required")
             {
