@@ -75,6 +75,18 @@ namespace Ryujinx.Graphics.Texture
             return new RobAndSliceSizes(robSize, sliceSize);
         }
 
+        /// <summary>
+        /// Switch 2 (Ampere) block-linear layout: inside a GOB, bits 5 and 6 of the offset are swapped
+        /// when they differ. Set while a Switch 2 title runs; it applies to every block-linear conversion.
+        /// </summary>
+        public static bool NativeTiling { get; set; }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int Native(int offset)
+        {
+            return NativeTiling ? offset ^ ((((offset >> 5) ^ (offset >> 6)) & 1) * 0x60) : offset;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int GetOffset(int x, int y, int z)
         {
@@ -100,7 +112,7 @@ namespace Ryujinx.Graphics.Texture
             offset += ((y & 0x01) >> 0) << 4;
             offset += ((x & 0x0f) >> 0) << 0;
 
-            return offset;
+            return Native(offset);
         }
 
         public (int offset, int size) GetRectangleRange(int x, int y, int width, int height)
@@ -165,11 +177,12 @@ namespace Ryujinx.Graphics.Texture
             offset += ((x & 0x3f) >> 5) << 8;
             offset += ((x & 0x1f) >> 4) << 5;
 
-            return offset + _yzPart;
+            return Native(offset + _yzPart);
         }
 
         /// <summary>
         /// Optimized conversion for line offset in bytes to an absolute offset. Input x must be divisible by 64.
+        /// Its callers place the 16-byte parts of the line themselves, so it is not used with NativeTiling.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int GetOffsetWithLineOffset64(int x)
@@ -189,7 +202,7 @@ namespace Ryujinx.Graphics.Texture
             offset += ((x & 0x1f) >> 4) << 5;
             offset += (x & 0x0f);
 
-            return offset + _yzPart;
+            return Native(offset + _yzPart);
         }
     }
 }

@@ -45,7 +45,19 @@ namespace Ryujinx.Graphics.Gpu
         /// True once a Switch 2 NVIDIA driver identified itself. Its channels bind Ampere classes and drive
         /// 3D and compute state through Turing MME64 macros, which the Maxwell engines can't run.
         /// </summary>
-        public bool Nx2Ampere { get; set; }
+        public bool Nx2Ampere
+        {
+            get => _nx2Ampere;
+            set
+            {
+                _nx2Ampere = value;
+
+                // Switch 2 GPUs swap two bits inside every GOB of block-linear images.
+                Ryujinx.Graphics.Texture.LayoutConverter.NativeTiling = value;
+            }
+        }
+
+        private bool _nx2Ampere;
 
         /// <summary>
         /// Switch 2 compute launch scheduling, shared by every channel.

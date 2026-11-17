@@ -8,6 +8,15 @@ namespace Ryujinx.Graphics.Texture
 {
     public static class LayoutConverter
     {
+        /// <summary>
+        /// Switch 2 block-linear layout for every conversion (see BlockLinearLayout.NativeTiling).
+        /// </summary>
+        public static bool NativeTiling
+        {
+            get => BlockLinearLayout.NativeTiling;
+            set => BlockLinearLayout.NativeTiling = value;
+        }
+
         public const int HostStrideAlignment = 4;
 
         public static void ConvertBlockLinearToLinear(
@@ -22,7 +31,7 @@ namespace Ryujinx.Graphics.Texture
             int gobHeight = gobBlocksInY * GobHeight;
 
             int strideTrunc = BitUtils.AlignDown(width * bytesPerPixel, 16);
-            int strideTrunc64 = BitUtils.AlignDown(width * bytesPerPixel, 64);
+            int strideTrunc64 = BlockLinearLayout.NativeTiling ? 0 : BitUtils.AlignDown(width * bytesPerPixel, 64);
 
             int xStart = strideTrunc / bytesPerPixel;
 
@@ -152,7 +161,7 @@ namespace Ryujinx.Graphics.Texture
                 }
 
                 int strideTrunc = BitUtils.AlignDown(w * bytesPerPixel, 16);
-                int strideTrunc64 = BitUtils.AlignDown(w * bytesPerPixel, 64);
+                int strideTrunc64 = BlockLinearLayout.NativeTiling ? 0 : BitUtils.AlignDown(w * bytesPerPixel, 64);
 
                 int xStart = strideTrunc / bytesPerPixel;
 
@@ -297,7 +306,7 @@ namespace Ryujinx.Graphics.Texture
             int gobHeight = gobBlocksInY * GobHeight;
 
             int strideTrunc = BitUtils.AlignDown(width * bytesPerPixel, 16);
-            int strideTrunc64 = BitUtils.AlignDown(width * bytesPerPixel, 64);
+            int strideTrunc64 = BlockLinearLayout.NativeTiling ? 0 : BitUtils.AlignDown(width * bytesPerPixel, 64);
 
             int xStart = strideTrunc / bytesPerPixel;
 
@@ -420,7 +429,7 @@ namespace Ryujinx.Graphics.Texture
                 }
 
                 int strideTrunc = BitUtils.AlignDown(w * bytesPerPixel, 16);
-                int strideTrunc64 = BitUtils.AlignDown(w * bytesPerPixel, 64);
+                int strideTrunc64 = BlockLinearLayout.NativeTiling ? 0 : BitUtils.AlignDown(w * bytesPerPixel, 64);
 
                 int xStart = strideTrunc / bytesPerPixel;
 
