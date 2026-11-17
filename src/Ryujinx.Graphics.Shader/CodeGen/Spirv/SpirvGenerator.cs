@@ -318,7 +318,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
         /// <summary>
         /// Loop iterations a function with bounded loops may run (see ShaderDefinitions.BoundLoops).
         /// </summary>
-        private const int MaxLoopIterations = 1 << 16;
+        private const int MaxLoopIterations = 256;
 
         private static void Generate(CodeGenContext context, AstBlock block)
         {

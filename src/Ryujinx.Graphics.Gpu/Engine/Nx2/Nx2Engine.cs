@@ -174,6 +174,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
         {
             MemoryManager memory = _channel.MemoryManager;
 
+            _context.Nx2Qmd.CurrentChannel = GpuContext.Nx2CurrentChannel;
+
             string error = _context.Nx2Qmd.Signal(
                 qmdAddress,
                 argument,

@@ -29,6 +29,29 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
         // scheduled on one channel while another decrements it.
         private readonly Dictionary<ulong, State> _states = [];
 
+        // Recent PCAS events per QMD (for stall reports): who signalled it, how, and the result.
+        private readonly Dictionary<ulong, Queue<string>> _history = [];
+
+        private void Remember(ulong address, string text)
+        {
+            if (!_history.TryGetValue(address, out Queue<string> events))
+            {
+                _history[address] = events = new Queue<string>();
+            }
+
+            events.Enqueue(text);
+
+            if (events.Count > 12)
+            {
+                events.Dequeue();
+            }
+        }
+
+        /// <summary>
+        /// Channel the next signals come from, for the history.
+        /// </summary>
+        public int CurrentChannel { get; set; }
+
         /// <summary>
         /// Semaphore reduction operations (ADD, MIN, MAX, INC, DEC, AND, OR, XOR) shared by QMD releases
         /// and the report semaphore.
@@ -86,7 +109,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                         continue;
                     }
 
-                    waiting.Add($"0x{key:X}(deps {state.Dependencies}, deferred {state.Deferred}{(state.Loaded ? ", loaded" : "")}{(state.Scheduled ? ", scheduled" : "")}{(state.Completed ? ", completed" : "")})");
+                    waiting.Add($"0x{key:X}(deps {state.Dependencies}, deferred {state.Deferred}{(state.Loaded ? ", loaded" : "")}{(state.Scheduled ? ", scheduled" : "")}{(state.Completed ? ", completed" : "")}; history: {(_history.TryGetValue(key, out Queue<string> events) ? string.Join(" | ", events) : "none")})");
                 }
 
                 return $"{completed} QMDs done, {waiting.Count} waiting: {string.Join(" ", waiting.GetRange(0, Math.Min(waiting.Count, 40)))}";
@@ -113,6 +136,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                 for (int i = 0; i < pending.Count; i++)
                 {
                     (ulong requestAddress, uint action, uint count) = pending[i];
+                    Remember(requestAddress, $"{(i == 0 ? $"ch {CurrentChannel:x}" : "dependent")} action {action} count {count}");
 
                     if (_states.Count >= 4096 && !_states.ContainsKey(requestAddress))
                     {
