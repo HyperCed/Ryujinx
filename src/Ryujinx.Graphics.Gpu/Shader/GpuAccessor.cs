@@ -77,6 +77,9 @@ namespace Ryujinx.Graphics.Gpu.Shader
         }
 
         /// <inheritdoc/>
+        public bool QueryNx2NativeProgram() => _nx2Code != null;
+
+        /// <inheritdoc/>
         public uint ConstantBuffer1Read(int offset)
         {
             ulong baseAddress = _compute

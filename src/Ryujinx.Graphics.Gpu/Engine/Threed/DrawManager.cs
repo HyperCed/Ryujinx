@@ -122,6 +122,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// <param name="indexCount">Number of index buffer elements used on the draw</param>
         /// <param name="drawFirstVertex">Index of the first vertex used on the draw</param>
         /// <param name="drawVertexCount">Number of vertices used on the draw</param>
+        private int _nx2DrawTraces;
+
         private void DrawEnd(ThreedClass engine, int firstIndex, int indexCount, int drawFirstVertex, int drawVertexCount)
         {
             ConditionalRenderEnabled renderEnable = ConditionalRendering.GetRenderEnable(
@@ -154,6 +156,15 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             _currentSpecState.SetHasConstantBufferDrawParameters(false);
 
             engine.UpdateState();
+
+            if (GpuContext.Nx2PresentTrace && _context.Nx2Ampere && _nx2DrawTraces < 40 && _state.State.RtColorState[0].Address.Pack() == GpuContext.Nx2PresentedAddress)
+            {
+                _nx2DrawTraces++;
+                ref var viewport = ref _state.State.ViewportExtents[0];
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                    $"Switch 2 draw to 0x{_state.State.RtColorState[0].Address.Pack():X}: render enable {renderEnable}, indexed {_drawState.DrawIndexed}, first index {firstIndex} count {indexCount}, vertices {drawFirstVertex}+{drawVertexCount}, " +
+                    $"viewport {viewport.X},{viewport.Y} {viewport.Width}x{viewport.Height}, rt control 0x{_state.State.RtControl.Packed:x}, color mask 0x{_state.State.RtColorMask[0].Packed:x}, program {GpuContext.Nx2LastProgram}");
+            }
 
             bool instanced = _drawState.VsUsesInstanceId || _drawState.IsAnyVbInstanced;
 

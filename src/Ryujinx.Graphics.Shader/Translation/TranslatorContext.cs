@@ -281,6 +281,11 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                 if (cfg.Blocks.Length != 0)
                 {
+                    if (i == 0 && GpuAccessor.QueryNx2NativeProgram())
+                    {
+                        Nx2BlitConstants.RunPass(cfg.Blocks, Definitions.Stage);
+                    }
+
                     RegisterUsage.FixupCalls(cfg.Blocks, frus);
 
                     Dominance.FindDominators(cfg);

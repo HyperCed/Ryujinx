@@ -116,6 +116,51 @@ namespace Ryujinx.Headless
             SDL3Driver.Instance.Initialize();
         }
 
+        // RYUJINX_FRAME_CAPTURE=<directory>: saves every RYUJINX_FRAME_CAPTURE_EVERY-th (default 120th)
+        // presented frame there as frame-<n>.png, to check the output of runs without a display.
+        private static readonly string _frameCaptureDirectory = Environment.GetEnvironmentVariable("RYUJINX_FRAME_CAPTURE");
+        private static readonly int _frameCaptureInterval = int.TryParse(Environment.GetEnvironmentVariable("RYUJINX_FRAME_CAPTURE_EVERY"), out int every) && every > 0 ? every : 120;
+        private long _presentedFrames;
+        private int _capturedFrames;
+
+        private void CaptureFrame(object sender, ScreenCaptureImageInfo e)
+        {
+            if (e.Data.Length == 0 || e.Width <= 0 || e.Height <= 0)
+            {
+                return;
+            }
+
+            string path = Path.Combine(_frameCaptureDirectory, $"frame-{Interlocked.Increment(ref _capturedFrames):D4}.png");
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    Directory.CreateDirectory(_frameCaptureDirectory);
+
+                    using SkiaSharp.SKBitmap bitmap = new(new SkiaSharp.SKImageInfo(e.Width, e.Height, e.IsBgra ? SkiaSharp.SKColorType.Bgra8888 : SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Opaque));
+
+                    System.Runtime.InteropServices.Marshal.Copy(e.Data, 0, bitmap.GetPixels(), Math.Min(e.Data.Length, e.Width * e.Height * 4));
+
+                    using SkiaSharp.SKBitmap flipped = new(bitmap.Width, bitmap.Height);
+                    using (SkiaSharp.SKCanvas canvas = new(flipped))
+                    {
+                        canvas.SetMatrix(SkiaSharp.SKMatrix.CreateScale(e.FlipX ? -1 : 1, e.FlipY ? -1 : 1, bitmap.Width / 2f, bitmap.Height / 2f));
+                        canvas.DrawBitmap(bitmap, SkiaSharp.SKPoint.Empty);
+                    }
+
+                    using SkiaSharp.SKData data = flipped.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
+                    using FileStream stream = File.Create(path);
+
+                    data.SaveTo(stream);
+                }
+                catch (Exception exception)
+                {
+                    Logger.Error?.Print(LogClass.Application, $"Cannot save the captured frame to {path}: {exception.Message}");
+                }
+            });
+        }
+
         public void Initialize(Switch device, List<InputConfig> inputConfigs, bool enableKeyboard, bool enableMouse)
         {
             Device = device;
@@ -128,6 +173,11 @@ namespace Ryujinx.Headless
             }
 
             Renderer = renderer;
+
+            if (_frameCaptureDirectory != null)
+            {
+                Renderer.ScreenCaptured += CaptureFrame;
+            }
 
             NpadManager.Initialize(device, inputConfigs, enableKeyboard, enableMouse);
             TouchScreenManager.Initialize(device);
@@ -312,6 +362,11 @@ namespace Ryujinx.Headless
                     while (Device.ConsumeFrameAvailable())
                     {
                         Device.PresentFrame(SwapBuffers);
+
+                        if (_frameCaptureDirectory != null && _presentedFrames++ % _frameCaptureInterval == 0)
+                        {
+                            Renderer.Screenshot();
+                        }
                     }
 
                     if (_ticks >= _ticksPerFrame)

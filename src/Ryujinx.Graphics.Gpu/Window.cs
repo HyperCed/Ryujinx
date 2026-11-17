@@ -193,6 +193,9 @@ namespace Ryujinx.Graphics.Gpu
         /// If the queue is empty, then no texture is presented.
         /// </summary>
         /// <param name="swapBuffersCallback">Callback method to call when a new texture should be presented on the screen</param>
+        private int _presentTraces;
+        private int _presentStats;
+
         public void Present(Action swapBuffersCallback)
         {
             _context.AdvanceSequence();
@@ -203,7 +206,33 @@ namespace Ryujinx.Graphics.Gpu
 
                 Image.Texture texture = pt.Cache.FindOrCreateTexture(null, TextureSearchFlags.WithUpscale, pt.Info, 0, range: pt.Range);
 
+                if (GpuContext.Nx2PresentTrace)
+                {
+                    GpuContext.Nx2PresentedAddress = pt.Range.GetSubRange(0).Address;
+                }
+
+                if (GpuContext.Nx2PresentTrace && _presentTraces++ < 8)
+                {
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Present: wanted {pt.Info.Width}x{pt.Info.Height} {pt.Info.FormatInfo.Format} gobs {pt.Info.GobBlocksInY} at {pt.Range}; got {texture.Info.Width}x{texture.Info.Height} {texture.Info.FormatInfo.Format} gobs {texture.Info.GobBlocksInY} linear {texture.Info.IsLinear} scale {texture.ScaleFactor} texture #{texture.GetHashCode():x}");
+                }
+
                 pt.Cache.Tick();
+
+                if (GpuContext.Nx2PresentTrace && _presentStats++ % 300 == 150)
+                {
+                    using GAL.PinnedSpan<byte> data = texture.HostTexture.GetData();
+                    System.ReadOnlySpan<byte> bytes = data.Get();
+                    int nonZero = 0;
+                    long sum = 0;
+
+                    for (int i = 0; i + 3 < bytes.Length; i += 64)
+                    {
+                        nonZero += bytes[i] != 0 || bytes[i + 1] != 0 || bytes[i + 2] != 0 ? 1 : 0;
+                        sum += bytes[i] + bytes[i + 1] + bytes[i + 2];
+                    }
+
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Present: texture #{texture.GetHashCode():x} content: {nonZero} of {bytes.Length / 64} sampled pixels non-black, mean {(double)sum / 3 / Math.Max(1, bytes.Length / 64):F1}, bytes {bytes.Length}");
+                }
 
                 texture.SynchronizeMemory();
 

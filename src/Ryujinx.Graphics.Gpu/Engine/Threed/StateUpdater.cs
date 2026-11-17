@@ -520,6 +520,12 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
                 changedScale |= _channel.TextureManager.SetRenderTargetColor(index, color);
 
+                if (GpuContext.Nx2PresentTrace && color != null && _context.Nx2Ampere &&
+                    _nx2TracedTargets.Add((colorState.Address.Pack(), colorState.WidthOrStride, colorState.Height, (uint)colorState.Format)))
+                {
+                    Logger.Info?.Print(LogClass.Gpu, $"Switch 2 render target {index}: 0x{colorState.Address.Pack():X} {colorState.WidthOrStride}x{colorState.Height} format 0x{(uint)colorState.Format:x} memory layout 0x{colorState.MemoryLayout.Packed:x} -> {color.Info.Width}x{color.Info.Height} {color.Info.FormatInfo.Format} gobs {color.Info.GobBlocksInY} linear {color.Info.IsLinear} texture #{color.GetHashCode():x}");
+                }
+
                 if (color != null)
                 {
                     if (clipRegionWidth > color.Width / samplesInX)
@@ -813,7 +819,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             // Viewport size is only used on the shader when YNegate is enabled,
             // and if the fragment shader accesses gl_FragCoord,
             // so there's no need to update it in other cases.
-            if (yNegate && _fsReadsFragCoord)
+            // Switch 2 blit shaders read the render area from it (Nx2BlitConstants).
+            if ((yNegate && _fsReadsFragCoord) || _context.Nx2Ampere)
             {
                 UpdateSupportBufferViewportSize();
             }
@@ -1464,9 +1471,15 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             }
         }
 
+        private readonly System.Collections.Generic.HashSet<(ulong, int, int, uint)> _nx2TracedTargets = [];
+
         private CachedShaderProgram Nx2GetGraphicsShader(ShaderCache shaderCache, int samplerPoolMaximumId, ShaderAddresses addresses)
         {
             Nx2DumpPrograms(addresses);
+            if (GpuContext.Nx2PresentTrace)
+            {
+                GpuContext.Nx2LastProgram = $"VS 0x{addresses.VertexB:X} FS 0x{addresses.Fragment:X}";
+            }
 
             lock (_nx2RejectedPrograms)
             {

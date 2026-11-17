@@ -1,3 +1,4 @@
+using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Logging;
 using Ryujinx.HLE.HOS.Kernel.Threading;
 using System;
@@ -238,9 +239,111 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
             _previousFenceId = fenceId;
             _previousFenceValue = fenceValue;
 
+            if (Ryujinx.Graphics.Gpu.GpuContext.Nx2RendersNative)
+            {
+                Composite(context.Device, w[3], w[5]);
+            }
+
             Nx2Tipc.Reply64(context, AvailableSlots, 0, 0);
 
             return ResultCode.Success;
+        }
+
+        private ulong _shownLayout;
+
+        // Shows a presented native image: a block-linear image in GPU memory (== CPU address), drawn by
+        // the 3D engine, found again in the texture cache by address. shownSize is the drawn area,
+        // (height - 1) << 16 | (width - 1), or 0.
+        private void Composite(Switch device, uint imageHandle, uint shownSize)
+        {
+            uint[] preference;
+            ulong address;
+
+            lock (_objects.Lock)
+            {
+                Nx2NativeObjects.Image image = _objects.FindImage(imageHandle, out uint first);
+
+                if (image == null || !_objects.Memories.TryGetValue(image.MemoryId, out Nx2NativeObjects.Memory memory) || memory.Address == 0)
+                {
+                    return;
+                }
+
+                preference = image.Preference;
+                address = memory.Address + image.Offset + (imageHandle - first) * image.Size;
+            }
+
+            if (device.Processes.ActiveApplication is not { } application)
+            {
+                return;
+            }
+
+            Nx2ImageLayout layout = Nx2ImageLayout.Calculate(preference);
+            Nx2NativeImageFormat imageFormat = (Nx2NativeImageFormat)preference[6];
+
+            (Ryujinx.Graphics.GAL.Format format, byte bytesPerPixel) = imageFormat switch
+            {
+                Nx2NativeImageFormat.Rgba16Float => (Ryujinx.Graphics.GAL.Format.R16G16B16A16Float, (byte)8),
+                Nx2NativeImageFormat.Rgb10A2 => (Ryujinx.Graphics.GAL.Format.R10G10B10A2Unorm, (byte)4),
+                _ => (Ryujinx.Graphics.GAL.Format.R8G8B8A8Srgb, (byte)4),
+            };
+
+            uint cropWidth = layout.Width;
+            uint cropHeight = layout.Height;
+            uint shownWidth = (shownSize & 0xffff) + 1;
+            uint shownHeight = (shownSize >> 16) + 1;
+
+            if (shownSize != 0 && shownWidth <= layout.Width && shownHeight <= layout.Height)
+            {
+                // The game draws a smaller area of its images (Mario Kart World: 2560x1440 of 3840x2160).
+                cropWidth = shownWidth;
+                cropHeight = shownHeight;
+            }
+            else if (!device.System.State.DockedMode)
+            {
+                // Handheld draws into the top-left 1920x1080 of the docked images.
+                cropWidth = Math.Min(cropWidth, 1920);
+                cropHeight = Math.Min(cropHeight, 1080);
+            }
+
+            ulong shown = ((ulong)layout.Width << 48) | ((ulong)layout.Height << 32) | (cropWidth << 16) | cropHeight;
+
+            if (shown != _shownLayout)
+            {
+                _shownLayout = shown;
+                Logger.Info?.Print(LogClass.ServiceVi, $"nx2:vi2 composite image {imageHandle} at 0x{address:X}: {layout.Width}x{layout.Height} {imageFormat}, block height {1 << (int)layout.BlockHeightLog2} rows, drawn area 0x{shownSize:x}, crop {cropWidth}x{cropHeight}");
+            }
+
+            AspectRatio aspectRatio = device.Configuration.AspectRatio;
+
+            Ryujinx.Graphics.GAL.ImageCrop crop = new(
+                0,
+                (int)cropWidth,
+                0,
+                (int)cropHeight,
+                false,
+                false,
+                aspectRatio == AspectRatio.Stretched,
+                aspectRatio.ToFloatX(),
+                aspectRatio.ToFloatY());
+
+            if (device.Gpu.Window.EnqueueFrameThreadSafe(
+                application.ProcessId,
+                address,
+                (int)layout.Width,
+                (int)layout.Height,
+                0,
+                false,
+                Math.Max((1 << (int)layout.BlockHeightLog2) / 8, 1), // The layout counts rows; a GOB is 8.
+                format,
+                bytesPerPixel,
+                crop,
+                (_, _) => { },
+                _ => { },
+                null))
+            {
+                device.Gpu.Window.SignalFrameReady();
+                device.Gpu.GPFifo.Interrupt();
+            }
         }
 
         private uint _previousFenceId = uint.MaxValue;

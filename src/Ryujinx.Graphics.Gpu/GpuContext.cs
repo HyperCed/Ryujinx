@@ -180,6 +180,25 @@ namespace Ryujinx.Graphics.Gpu
         public static volatile string Nx2Phase = "idle";
 
         /// <summary>
+        /// The last Switch 2 graphics program bound, for draw traces.
+        /// </summary>
+        internal static string Nx2LastProgram;
+
+        /// <summary>
+        /// RYUJINX_PRESENT_TRACE=1: logs Switch 2 render targets, draws into presented images and the
+        /// content of presented images (sampled), to find out why a frame shows nothing.
+        /// </summary>
+        internal static ulong Nx2PresentedAddress;
+
+        /// <summary>
+        /// True when Switch 2 3D methods run on the Maxwell 3D engine (RYUJINX_NX2_MAXWELL=1), so presented
+        /// images hold what was drawn.
+        /// </summary>
+        public static bool Nx2RendersNative => Engine.GPFifo.GPFifoProcessor.Nx2Maxwell;
+
+        public static readonly bool Nx2PresentTrace = Environment.GetEnvironmentVariable("RYUJINX_PRESENT_TRACE") == "1";
+
+        /// <summary>
         /// Hash of the Switch 2 channel whose commands the GPU thread runs, for diagnostics.
         /// </summary>
         internal static int Nx2CurrentChannel;

@@ -185,6 +185,15 @@ namespace Ryujinx.Graphics.Shader
         }
 
         /// <summary>
+        /// Queries whether the code is a lowered Switch 2 (Ampere) program.
+        /// </summary>
+        /// <returns>True for lowered Switch 2 programs</returns>
+        bool QueryNx2NativeProgram()
+        {
+            return false;
+        }
+
+        /// <summary>
         /// Queries host about the presence of the FrontFacing built-in variable bug.
         /// </summary>
         /// <returns>True if the bug is present on the host device used, false otherwise</returns>
