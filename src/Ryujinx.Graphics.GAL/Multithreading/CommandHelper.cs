@@ -103,6 +103,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
             Register<CopyBufferCommand>(CommandType.CopyBuffer);
             Register<DispatchComputeCommand>(CommandType.DispatchCompute);
             Register<DrawCommand>(CommandType.Draw);
+            Register<DrawMeshTasksCommand>(CommandType.DrawMeshTasks);
             Register<DrawIndexedCommand>(CommandType.DrawIndexed);
             Register<DrawIndexedIndirectCommand>(CommandType.DrawIndexedIndirect);
             Register<DrawIndexedIndirectCountCommand>(CommandType.DrawIndexedIndirectCount);

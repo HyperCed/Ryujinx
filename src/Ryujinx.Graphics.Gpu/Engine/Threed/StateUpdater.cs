@@ -1,4 +1,5 @@
 using Ryujinx.Common.Logging;
+using Ryujinx.Common.Memory;
 using Ryujinx.Graphics.GAL;
 using Ryujinx.Graphics.Gpu.Engine.Threed.Blender;
 using Ryujinx.Graphics.Gpu.Engine.Types;
@@ -8,6 +9,7 @@ using Ryujinx.Graphics.Gpu.Shader;
 using Ryujinx.Graphics.Shader;
 using Ryujinx.Graphics.Texture;
 using System;
+using System.Linq;
 using System.Runtime.CompilerServices;
 
 namespace Ryujinx.Graphics.Gpu.Engine.Threed
@@ -199,7 +201,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
                 new StateUpdateCallbackEntry(UpdateShaderState,
                     nameof(ThreedClassState.ShaderBaseAddress),
-                    nameof(ThreedClassState.ShaderState)),
+                    nameof(ThreedClassState.ShaderState),
+                    nameof(ThreedClassState.Nx2MeshState)),
 
                 new StateUpdateCallbackEntry(UpdateRenderTargetState,
                     nameof(ThreedClassState.RtColorState),
@@ -1500,7 +1503,43 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// </summary>
         internal const int Nx2TextureBufferIndex = 2;
 
-        private CachedShaderProgram Nx2GetGraphicsShader(ShaderCache shaderCache, int samplerPoolMaximumId, ShaderAddresses addresses)
+        private static readonly bool _nx2NoMesh = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_MESH") == "1";
+
+        /// <summary>
+        /// While SET_MESH_CONTROL is on, a Switch 2 draw binds a task program in the vertex slot (or its mesh
+        /// program without a task), the mesh program in the tessellation evaluation slot and a header-only
+        /// pass-through geometry program naming the per-primitive outputs (read here, not translated).
+        /// </summary>
+        private Shader.Nx2.Nx2MeshDraw Nx2GetMeshDraw(Span<ulong> addressesSpan)
+        {
+            ref Array4<uint> mesh = ref _state.State.Nx2MeshState;
+
+            if ((mesh[0] & 1) == 0)
+            {
+                return null;
+            }
+
+            if (_nx2NoMesh)
+            {
+                throw new Nx2DrawSkippedException();
+            }
+
+            ulong geometry = addressesSpan[4];
+            bool hasTask = addressesSpan[3] != 0;
+            byte[] header = null;
+
+            if (geometry != 0 && _channel.MemoryManager.IsMapped(geometry))
+            {
+                header = _channel.MemoryManager.GetSpan(geometry, 0x50).ToArray();
+            }
+
+            addressesSpan[2] = 0;
+            addressesSpan[4] = 0;
+
+            return new Shader.Nx2.Nx2MeshDraw(mesh[1], mesh[2], mesh[3], header, hasTask);
+        }
+
+        private CachedShaderProgram Nx2GetGraphicsShader(ShaderCache shaderCache, int samplerPoolMaximumId, ShaderAddresses addresses, Shader.Nx2.Nx2MeshDraw nx2Mesh)
         {
             Nx2DumpPrograms(addresses);
             if (GpuContext.Nx2PresentTrace)
@@ -1525,7 +1564,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     samplerPoolMaximumId,
                     ref _currentSpecState.GetPoolState(),
                     ref _currentSpecState.GetGraphicsState(),
-                    addresses);
+                    addresses,
+                    nx2Mesh);
             }
             catch (Exception exception) when (exception is not Nx2DrawSkippedException)
             {
@@ -1539,7 +1579,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
                 if (count <= 32 || count % 100 == 0)
                 {
-                    Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 graphics program rejected ({count} so far): VS 0x{addresses.VertexB:X} FS 0x{addresses.Fragment:X}: {exception.GetType().Name}: {exception.Message}");
+                    Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 graphics program rejected ({count} so far): VS 0x{addresses.VertexB:X} {(nx2Mesh != null ? $"mesh 0x{addresses.TessEvaluation:X} (A 0x{nx2Mesh.ShaderA:x} B 0x{nx2Mesh.ShaderB:x} init 0x{nx2Mesh.InitShader:x}) " : "")}FS 0x{addresses.Fragment:X}: {exception.GetType().Name}: {exception.Message}{(exception is NotSupportedException or InvalidOperationException ? "" : $" at {exception.StackTrace?.Split('\n').FirstOrDefault()?.Trim()}")}");
                 }
 
                 throw new Nx2DrawSkippedException();
@@ -1584,7 +1624,9 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
             if (_context.Nx2Ampere)
             {
-                gs = Nx2GetGraphicsShader(shaderCache, samplerPoolMaximumId, addresses);
+                Shader.Nx2.Nx2MeshDraw nx2Mesh = Nx2GetMeshDraw(addressesSpan);
+
+                gs = Nx2GetGraphicsShader(shaderCache, samplerPoolMaximumId, addresses, nx2Mesh);
             }
             else
             {
@@ -1605,6 +1647,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
             byte oldVsClipDistancesWritten = _vsClipDistancesWritten;
 
+            _drawState.Nx2MeshDraw = gs.Nx2IsMesh;
             _drawState.VsUsesInstanceId = gs.Shaders[1]?.Info.UsesInstanceId ?? false;
             _vsUsesDrawParameters = gs.Shaders[1]?.Info.UsesDrawParameters ?? false;
             _vsClipDistancesWritten = gs.Shaders[1]?.Info.ClipDistancesWritten ?? 0;

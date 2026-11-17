@@ -26,6 +26,8 @@ namespace Ryujinx.Graphics.Vulkan
                 ShaderStage.TessellationEvaluation => ShaderStageFlags.TessellationEvaluationBit,
                 ShaderStage.Fragment => ShaderStageFlags.FragmentBit,
                 ShaderStage.Compute => ShaderStageFlags.ComputeBit,
+                ShaderStage.Task => ShaderStageFlags.TaskBitExt,
+                ShaderStage.Mesh => ShaderStageFlags.MeshBitExt,
                 _ => LogInvalidAndReturn(stage, nameof(ShaderStage), (ShaderStageFlags)0),
             };
         }
@@ -40,6 +42,8 @@ namespace Ryujinx.Graphics.Vulkan
                 ShaderStage.TessellationEvaluation => PipelineStageFlags.TessellationEvaluationShaderBit,
                 ShaderStage.Fragment => PipelineStageFlags.FragmentShaderBit,
                 ShaderStage.Compute => PipelineStageFlags.ComputeShaderBit,
+                ShaderStage.Task => PipelineStageFlags.TaskShaderBitExt,
+                ShaderStage.Mesh => PipelineStageFlags.MeshShaderBitExt,
                 _ => LogInvalidAndReturn(stage, nameof(ShaderStage), (PipelineStageFlags)0),
             };
         }
@@ -73,6 +77,16 @@ namespace Ryujinx.Graphics.Vulkan
             if (stages.HasFlag(ResourceStages.Fragment))
             {
                 stageFlags |= ShaderStageFlags.FragmentBit;
+            }
+
+            if (stages.HasFlag(ResourceStages.Task))
+            {
+                stageFlags |= ShaderStageFlags.TaskBitExt;
+            }
+
+            if (stages.HasFlag(ResourceStages.Mesh))
+            {
+                stageFlags |= ShaderStageFlags.MeshBitExt;
             }
 
             return stageFlags;

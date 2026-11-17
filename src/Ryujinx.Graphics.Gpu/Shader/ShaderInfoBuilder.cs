@@ -13,7 +13,9 @@ namespace Ryujinx.Graphics.Gpu.Shader
         private const ResourceStages SupportBufferStages =
             ResourceStages.Compute |
             ResourceStages.Vertex |
-            ResourceStages.Fragment;
+            ResourceStages.Fragment |
+            ResourceStages.Task |
+            ResourceStages.Mesh;
 
         private const ResourceStages VtgStages =
             ResourceStages.Vertex |
@@ -103,14 +105,15 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// </summary>
         /// <param name="info">Shader stage information</param>
         /// <param name="vertexAsCompute">True if the shader stage has been converted into a compute shader</param>
-        public void AddStageInfo(ShaderProgramInfo info, bool vertexAsCompute = false)
+        /// <param name="slotIndex">Graphics slot of a Switch 2 task/mesh program (0 vertex, 2 tessellation evaluation), or -1</param>
+        public void AddStageInfo(ShaderProgramInfo info, bool vertexAsCompute = false, int slotIndex = -1)
         {
             if (info.Stage == ShaderStage.Fragment)
             {
                 _fragmentOutputMap = info.FragmentOutputMap;
             }
 
-            int stageIndex = GpuAccessorBase.GetStageIndex(info.Stage switch
+            int stageIndex = GpuAccessorBase.GetStageIndex(slotIndex >= 0 ? slotIndex : info.Stage switch
             {
                 ShaderStage.TessellationControl => 1,
                 ShaderStage.TessellationEvaluation => 2,
@@ -127,6 +130,8 @@ namespace Ryujinx.Graphics.Gpu.Shader
                 ShaderStage.TessellationEvaluation => ResourceStages.TessellationEvaluation,
                 ShaderStage.Geometry => ResourceStages.Geometry,
                 ShaderStage.Fragment => ResourceStages.Fragment,
+                ShaderStage.Task => ResourceStages.Task,
+                ShaderStage.Mesh => ResourceStages.Mesh,
                 _ => ResourceStages.None,
             };
 

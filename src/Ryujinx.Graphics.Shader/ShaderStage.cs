@@ -10,6 +10,11 @@ namespace Ryujinx.Graphics.Shader
         Fragment,
 
         Count,
+
+        // Switch 2 (NVN) task and mesh programs (VK_EXT_mesh_shader). After Count: arrays sized by stage
+        // count keep their size; the GPU binds them in the vertex and tessellation evaluation slots.
+        Task,
+        Mesh,
     }
 
     public static class ShaderStageExtensions

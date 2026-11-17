@@ -418,7 +418,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                 // Using patches topology without a tessellation shader is invalid.
                 // If we find such a case, return null pipeline to skip the draw.
-                if (Topology == PrimitiveTopology.PatchList && !HasTessellationControlShader)
+                if (Topology == PrimitiveTopology.PatchList && !HasTessellationControlShader && !program.IsMesh)
                 {
                     program.AddGraphicsPipeline(ref Internal, null);
 
@@ -590,7 +590,8 @@ namespace Ryujinx.Graphics.Vulkan
                 dynamicStates[5] = DynamicState.StencilReference;
                 dynamicStates[6] = DynamicState.BlendConstants;
 
-                if (supportsExtDynamicState && (gd.SupportsMTL31 || !gd.IsMoltenVk))
+                // Mesh pipelines have no vertex input.
+                if (supportsExtDynamicState && (gd.SupportsMTL31 || !gd.IsMoltenVk) && !program.IsMesh)
                 {
                     // Requires Metal 3.1 and new MoltenVK, however extended dynamic states extension is not
                     // available on older versions of MVK, so we can safely check only OS version.
@@ -632,9 +633,10 @@ namespace Ryujinx.Graphics.Vulkan
                     Flags = flags,
                     StageCount = StagesCount,
                     PStages = Stages.Pointer,
-                    PVertexInputState = &vertexInputState,
-                    PInputAssemblyState = &inputAssemblyState,
-                    PTessellationState = &tessellationState,
+                    // Mesh pipelines have no vertex input, input assembly or tessellation state.
+                    PVertexInputState = program.IsMesh ? null : &vertexInputState,
+                    PInputAssemblyState = program.IsMesh ? null : &inputAssemblyState,
+                    PTessellationState = program.IsMesh ? null : &tessellationState,
                     PViewportState = &viewportState,
                     PRasterizationState = &rasterizationState,
                     PMultisampleState = &multisampleState,

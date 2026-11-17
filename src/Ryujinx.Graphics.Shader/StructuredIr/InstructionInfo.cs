@@ -106,6 +106,10 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
             Add(Instruction.MultiplyHighS32,          AggregateType.S32,    AggregateType.S32,     AggregateType.S32);
             Add(Instruction.MultiplyHighU32,          AggregateType.U32,    AggregateType.U32,     AggregateType.U32);
             Add(Instruction.Negate,                   AggregateType.Scalar, AggregateType.Scalar);
+            Add(Instruction.Nx2IsbeRead,              AggregateType.U32,    AggregateType.U32);
+            Add(Instruction.Nx2IsbeWrite,             AggregateType.Void,   AggregateType.S32,     AggregateType.U32,     AggregateType.U32);
+            Add(Instruction.Nx2MeshEpilogue,          AggregateType.Void);
+            Add(Instruction.Nx2MeshPrologue,          AggregateType.Void);
             Add(Instruction.PackDouble2x32,           AggregateType.FP64,   AggregateType.U32,     AggregateType.U32);
             Add(Instruction.PackHalf2x16,             AggregateType.U32,    AggregateType.FP32,    AggregateType.FP32);
             Add(Instruction.ReciprocalSquareRoot,     AggregateType.Scalar, AggregateType.Scalar);

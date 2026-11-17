@@ -75,6 +75,12 @@ namespace Ryujinx.Graphics.GAL.Multithreading
             _renderer.QueueCommand();
         }
 
+        public unsafe void DrawMeshTasks(int groupCountX, int groupCountY, int groupCountZ)
+        {
+            _renderer.New<DrawMeshTasksCommand>()->Set(groupCountX, groupCountY, groupCountZ);
+            _renderer.QueueCommand();
+        }
+
         public unsafe void DrawIndexed(int indexCount, int instanceCount, int firstIndex, int firstVertex, int firstInstance)
         {
             _renderer.New<DrawIndexedCommand>()->Set(indexCount, instanceCount, firstIndex, firstVertex, firstInstance);

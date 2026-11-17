@@ -79,6 +79,25 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <inheritdoc/>
         public bool QueryNx2NativeProgram() => _nx2Code != null;
 
+        private Ryujinx.Graphics.Shader.Translation.Nx2MeshState _nx2Mesh;
+        private int _nx2PerPrimitiveInputs;
+
+        /// <summary>
+        /// Makes the program translate as a Switch 2 task or mesh program.
+        /// </summary>
+        public void Nx2SetMesh(Ryujinx.Graphics.Shader.Translation.Nx2MeshState state) => _nx2Mesh = state;
+
+        /// <summary>
+        /// Sets the generic inputs of a fragment program that the mesh program before it writes per primitive.
+        /// </summary>
+        public void Nx2SetPerPrimitiveInputs(int mask) => _nx2PerPrimitiveInputs = mask;
+
+        /// <inheritdoc/>
+        public Ryujinx.Graphics.Shader.Translation.Nx2MeshState QueryNx2MeshState() => _nx2Mesh;
+
+        /// <inheritdoc/>
+        public int QueryNx2PerPrimitiveInputs() => _nx2PerPrimitiveInputs;
+
         /// <inheritdoc/>
         public uint ConstantBuffer1Read(int offset)
         {

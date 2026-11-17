@@ -63,6 +63,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
         CopyBuffer,
         DispatchCompute,
         Draw,
+        DrawMeshTasks,
         DrawIndexed,
         DrawIndexedIndirect,
         DrawIndexedIndirectCount,

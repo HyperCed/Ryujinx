@@ -76,7 +76,7 @@ namespace Ryujinx.Graphics.Gpu.Shader.Nx2
         /// <param name="address">Address of the program (its native header for graphics programs)</param>
         /// <param name="stageIndex">Graphics stage index (0 vertex to 4 fragment), or -1 for compute</param>
         /// <exception cref="Nx2ShaderException">The program cannot be lowered</exception>
-        public static Nx2ShaderProgram Get(MemoryManager memoryManager, ulong address, int stageIndex)
+        public static Nx2ShaderProgram Get(MemoryManager memoryManager, ulong address, int stageIndex, bool meshStage = false)
         {
             bool compute = stageIndex < 0;
             int headerSize = compute ? 0 : Nx2NativeProgram.GraphicsHeaderSize;
@@ -93,10 +93,18 @@ namespace Ryujinx.Graphics.Gpu.Shader.Nx2
                 Nx2NativeProgram.Dump(memoryManager, address, 0, "cs", code);
             }
 
-            object entry = _lowered.GetOrAdd((Nx2NativeProgram.Key(code), address, stageIndex), _ => Lower(memoryManager, address, headerSize, stageIndex, code));
+            // Task and mesh programs lower like vertex programs, keeping their stage buffer accesses.
+            int loweringStage = meshStage ? MeshStageIndex : stageIndex;
+
+            object entry = _lowered.GetOrAdd((Nx2NativeProgram.Key(code), address, loweringStage), _ => Lower(memoryManager, address, headerSize, loweringStage, code));
 
             return entry as Nx2ShaderProgram ?? throw new Nx2ShaderException((string)entry);
         }
+
+        /// <summary>
+        /// Stage index task and mesh programs are lowered (and cached) with.
+        /// </summary>
+        private const int MeshStageIndex = 10;
 
         private static object Lower(MemoryManager memoryManager, ulong address, int headerSize, int stageIndex, Nx2Instruction[] code)
         {
@@ -120,12 +128,15 @@ namespace Ryujinx.Graphics.Gpu.Shader.Nx2
             }
 
             // Task and mesh programs keep their stage buffer accesses as a pseudo instruction that only
-            // a mesh pipeline could run.
-            foreach (ulong instruction in lowered.Instructions)
+            // a mesh pipeline can run.
+            if (stageIndex != MeshStageIndex)
             {
-                if ((instruction >> 52) == 0xefc)
+                foreach (ulong instruction in lowered.Instructions)
                 {
-                    return "task or mesh program (unsupported)";
+                    if ((instruction >> 52) == 0xefc)
+                    {
+                        return "task or mesh program outside a mesh pipeline";
+                    }
                 }
             }
 

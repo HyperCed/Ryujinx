@@ -47,7 +47,8 @@ namespace Ryujinx.Graphics.Vulkan
             "VK_KHR_8bit_storage",
             "VK_KHR_maintenance2",
             "VK_EXT_attachment_feedback_loop_layout",
-            "VK_EXT_attachment_feedback_loop_dynamic_state"
+            "VK_EXT_attachment_feedback_loop_dynamic_state",
+            "VK_EXT_mesh_shader", // Switch 2 task and mesh programs.
         ];
 
         private static readonly string[] _requiredExtensions =
@@ -339,6 +340,17 @@ namespace Ryujinx.Graphics.Vulkan
                 features2.PNext = &supportedFeaturesTransformFeedback;
             }
 
+            PhysicalDeviceMeshShaderFeaturesEXT supportedFeaturesMeshShader = new()
+            {
+                SType = StructureType.PhysicalDeviceMeshShaderFeaturesExt,
+                PNext = features2.PNext,
+            };
+
+            if (physicalDevice.IsDeviceExtensionPresent("VK_EXT_mesh_shader"))
+            {
+                features2.PNext = &supportedFeaturesMeshShader;
+            }
+
             PhysicalDeviceRobustness2FeaturesEXT supportedFeaturesRobustness2 = new()
             {
                 SType = StructureType.PhysicalDeviceRobustness2FeaturesExt,
@@ -451,6 +463,22 @@ namespace Ryujinx.Graphics.Vulkan
                 };
 
                 pExtendedFeatures = &featuresPrimitiveTopologyListRestart;
+            }
+
+            PhysicalDeviceMeshShaderFeaturesEXT featuresMeshShader;
+
+            if (physicalDevice.IsDeviceExtensionPresent("VK_EXT_mesh_shader"))
+            {
+                // Only the two stages: the multiview, shading rate and query features need more.
+                featuresMeshShader = new PhysicalDeviceMeshShaderFeaturesEXT
+                {
+                    SType = StructureType.PhysicalDeviceMeshShaderFeaturesExt,
+                    PNext = pExtendedFeatures,
+                    TaskShader = supportedFeaturesMeshShader.TaskShader,
+                    MeshShader = supportedFeaturesMeshShader.MeshShader,
+                };
+
+                pExtendedFeatures = &featuresMeshShader;
             }
 
             PhysicalDeviceRobustness2FeaturesEXT featuresRobustness2;

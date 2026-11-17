@@ -323,6 +323,25 @@ namespace Ryujinx.Graphics.Vulkan
             Gd.Api.CmdDispatchIndirect(CommandBuffer, indirectBuffer.Get(Cbs, indirectBufferOffset, 12).Value, (ulong)indirectBufferOffset);
         }
 
+        public void DrawMeshTasks(int groupCountX, int groupCountY, int groupCountZ)
+        {
+            if (groupCountX == 0 || groupCountY == 0 || groupCountZ == 0 || Gd.MeshShaderApi == null)
+            {
+                return;
+            }
+
+            if (!RecreateGraphicsPipelineIfNeeded())
+            {
+                return;
+            }
+
+            BeginRenderPass();
+            DrawCount++;
+
+            // maxTaskWorkGroupCount is the compute grid limit.
+            Gd.MeshShaderApi.CmdDrawMeshTask(CommandBuffer, (uint)Math.Min(groupCountX, 65535), (uint)groupCountY, (uint)groupCountZ);
+        }
+
         public void Draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance)
         {
             if (vertexCount == 0)

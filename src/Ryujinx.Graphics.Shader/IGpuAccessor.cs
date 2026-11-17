@@ -194,6 +194,25 @@ namespace Ryujinx.Graphics.Shader
         }
 
         /// <summary>
+        /// Queries the Switch 2 task/mesh state of the program (see <see cref="Translation.Nx2MeshState"/>).
+        /// </summary>
+        /// <returns>The state, with a stage other than task or mesh for other programs</returns>
+        Translation.Nx2MeshState QueryNx2MeshState()
+        {
+            return default;
+        }
+
+        /// <summary>
+        /// Queries the generic inputs of a fragment program that the Switch 2 mesh program before it writes
+        /// per primitive.
+        /// </summary>
+        /// <returns>Bit mask of generic attribute indices</returns>
+        int QueryNx2PerPrimitiveInputs()
+        {
+            return 0;
+        }
+
+        /// <summary>
         /// Queries host about the presence of the FrontFacing built-in variable bug.
         /// </summary>
         /// <returns>True if the bug is present on the host device used, false otherwise</returns>

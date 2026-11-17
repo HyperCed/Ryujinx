@@ -127,7 +127,8 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
                 if (decoratedTypes.Add(structType))
                 {
-                    context.Decorate(structType, isBuffer ? Decoration.BufferBlock : Decoration.Block);
+                    // SPIR-V 1.4 (Switch 2 mesh pipelines) has no BufferBlock: storage buffers are Block in StorageBuffer.
+                    context.Decorate(structType, isBuffer && !context.Nx2UsesMeshShader ? Decoration.BufferBlock : Decoration.Block);
 
                     for (int fieldIndex = 0; fieldIndex < structFieldOffsets.Length; fieldIndex++)
                     {
@@ -135,8 +136,9 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                     }
                 }
 
-                SpvInstruction pointerType = context.TypePointer(StorageClass.Uniform, structType);
-                SpvInstruction variable = context.Variable(pointerType, StorageClass.Uniform);
+                StorageClass bufferClass = isBuffer && context.Nx2UsesMeshShader ? StorageClass.StorageBuffer : StorageClass.Uniform;
+                SpvInstruction pointerType = context.TypePointer(bufferClass, structType);
+                SpvInstruction variable = context.Variable(pointerType, bufferClass);
 
                 context.Name(variable, buffer.Name);
                 context.Decorate(variable, Decoration.DescriptorSet, (LiteralInteger)setIndex);
@@ -512,6 +514,21 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 {
                     throw new InvalidOperationException($"Unknown variable {ioVariable}.");
                 }
+
+                if (!isOutput &&
+                    context.Definitions.Stage is ShaderStage.Task or ShaderStage.Mesh &&
+                    Nx2MeshCodeGen.IsEmulatedSubgroupInput(ioVariable))
+                {
+                    // Metal object and mesh functions have no subgroup built-ins: a private variable the
+                    // prologue fills from the invocation index (Nx2MeshCodeGen.GeneratePrologue).
+                    SpvInstruction privateVar = context.Variable(context.TypePointer(StorageClass.Private, context.GetType(varType)), StorageClass.Private);
+
+                    context.AddGlobalVariable(privateVar);
+                    context.Name(privateVar, $"emulated_{ioVariable}");
+                    context.Inputs.Add(ioDefinition, privateVar);
+
+                    return;
+                }
             }
 
             bool hasComponent = context.Definitions.HasPerLocationInputOrOutputComponent(ioVariable, ioDefinition.Location, ioDefinition.Component, isOutput);
@@ -625,7 +642,21 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 }
             }
 
-            if (!isOutput)
+            if (!isOutput &&
+                ioVariable == IoVariable.UserDefined &&
+                context.Definitions.Stage == ShaderStage.Fragment &&
+                (context.Definitions.Nx2PerPrimitiveInputs & (1 << ioDefinition.Location)) != 0)
+            {
+                // Written per primitive by a Switch 2 mesh program: constant over the primitive.
+                context.Nx2UsesMeshShader = true;
+                context.Decorate(spvVar, Decoration.PerPrimitiveEXT);
+
+                if (varType.HasFlag(AggregateType.S32) || varType.HasFlag(AggregateType.U32))
+                {
+                    context.Decorate(spvVar, Decoration.Flat);
+                }
+            }
+            else if (!isOutput)
             {
                 switch (iq)
                 {

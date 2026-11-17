@@ -40,6 +40,11 @@ namespace Ryujinx.Graphics.Vulkan
         internal KhrSurface SurfaceApi { get; private set; }
         internal KhrSwapchain SwapchainApi { get; private set; }
         internal ExtConditionalRendering ConditionalRenderingApi { get; private set; }
+
+        /// <summary>
+        /// VK_EXT_mesh_shader, for Switch 2 task and mesh programs (null without it).
+        /// </summary>
+        internal ExtMeshShader MeshShaderApi { get; private set; }
         internal ExtExtendedDynamicState ExtendedDynamicStateApi { get; private set; }
         internal KhrPushDescriptor PushDescriptorApi { get; private set; }
         internal ExtTransformFeedback TransformFeedbackApi { get; private set; }
@@ -138,6 +143,11 @@ namespace Ryujinx.Graphics.Vulkan
         private unsafe void LoadFeatures(uint maxQueueCount, uint queueFamilyIndex)
         {
             FormatCapabilities = new FormatCapabilities(Api, _physicalDevice.PhysicalDevice);
+
+            if (Api.TryGetDeviceExtension(_instance.Instance, _device, out ExtMeshShader meshShaderApi))
+            {
+                MeshShaderApi = meshShaderApi;
+            }
 
             if (Api.TryGetDeviceExtension(_instance.Instance, _device, out ExtConditionalRendering conditionalRenderingApi))
             {

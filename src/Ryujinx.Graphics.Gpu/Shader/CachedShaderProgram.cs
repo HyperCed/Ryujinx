@@ -40,6 +40,11 @@ namespace Ryujinx.Graphics.Gpu.Shader
         public CachedShaderBindings Bindings { get; }
 
         /// <summary>
+        /// Switch 2 task/mesh program: draws launch task (or mesh) workgroups.
+        /// </summary>
+        public bool Nx2IsMesh { get; set; }
+
+        /// <summary>
         /// Creates a new instance of the shader bundle.
         /// </summary>
         /// <param name="hostProgram">Host program with all the shader stages</param>

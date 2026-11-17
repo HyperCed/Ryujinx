@@ -59,6 +59,10 @@ namespace Ryujinx.Graphics.Gpu.Shader
         private readonly Dictionary<ulong, CachedShaderProgram> _cpPrograms;
         private readonly Dictionary<ShaderAddresses, CachedShaderProgram> _gpPrograms;
 
+        // Switch 2 task/mesh programs: translated with the mesh registers and the pass-through geometry header,
+        // so keyed by them too, and kept out of the other caches (the same code draws without mesh control).
+        private readonly Dictionary<(ShaderAddresses, ulong), CachedShaderProgram> _nx2MeshPrograms = new();
+
         private readonly struct ProgramToSave
         {
             public readonly CachedShaderProgram CachedProgram;
@@ -324,17 +328,31 @@ namespace Ryujinx.Graphics.Gpu.Shader
             int samplerPoolMaximumId,
             ref GpuChannelPoolState poolState,
             ref GpuChannelGraphicsState graphicsState,
-            ShaderAddresses addresses)
+            ShaderAddresses addresses,
+            Nx2.Nx2MeshDraw nx2Mesh = null)
         {
-            if (_gpPrograms.TryGetValue(addresses, out CachedShaderProgram gpShaders) && IsShaderEqual(channel, ref poolState, ref graphicsState, gpShaders, addresses))
-            {
-                return gpShaders;
-            }
+            CachedShaderProgram gpShaders;
+            CachedGraphicsGuestCode cachedGuestCode = default;
 
-            if (_graphicsShaderCache.TryFind(channel, ref poolState, ref graphicsState, addresses, out gpShaders, out CachedGraphicsGuestCode cachedGuestCode))
+            if (nx2Mesh != null)
             {
-                _gpPrograms[addresses] = gpShaders;
-                return gpShaders;
+                if (_nx2MeshPrograms.TryGetValue((addresses, nx2Mesh.Key), out gpShaders) && IsShaderEqual(channel, ref poolState, ref graphicsState, gpShaders, addresses))
+                {
+                    return gpShaders;
+                }
+            }
+            else
+            {
+                if (_gpPrograms.TryGetValue(addresses, out gpShaders) && IsShaderEqual(channel, ref poolState, ref graphicsState, gpShaders, addresses))
+                {
+                    return gpShaders;
+                }
+
+                if (_graphicsShaderCache.TryFind(channel, ref poolState, ref graphicsState, addresses, out gpShaders, out cachedGuestCode))
+                {
+                    _gpPrograms[addresses] = gpShaders;
+                    return gpShaders;
+                }
             }
 
             TransformFeedbackDescriptor[] transformFeedbackDescriptors = GetTransformFeedbackDescriptors(ref state);
@@ -353,7 +371,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
             TargetApi api = _context.Capabilities.Api;
 
             // Switch 2 programs are lowered to Maxwell code, which the translator reads in their place.
-            Nx2.Nx2ShaderProgram[] nx2Programs = _context.Nx2Ampere ? Nx2GetPrograms(channel, addresses) : null;
+            Nx2.Nx2ShaderProgram[] nx2Programs = _context.Nx2Ampere ? Nx2GetPrograms(channel, addresses, nx2Mesh) : null;
 
             for (int stageIndex = Constants.ShaderStages - 1; stageIndex >= 0; stageIndex--)
             {
@@ -374,9 +392,25 @@ namespace Ryujinx.Graphics.Gpu.Shader
                         gpuAccessor.Nx2SetCode(gpuVa, nx2Programs[stageIndex].LoweredCode);
                     }
 
+                    bool nx2Task = false;
+
+                    if (nx2Mesh != null)
+                    {
+                        if (stageIndex is 0 or 2)
+                        {
+                            gpuAccessor.Nx2SetMesh(nx2Mesh.GetState(stageIndex));
+                            nx2Task = stageIndex == 0 && nx2Mesh.HasTask;
+                        }
+                        else if (stageIndex == 4)
+                        {
+                            gpuAccessor.Nx2SetPerPrimitiveInputs(nx2Mesh.PerPrimitiveGenerics);
+                        }
+                    }
+
                     TranslatorContext currentStage = DecodeGraphicsShader(gpuAccessor, api, DefaultFlags, gpuVa);
 
-                    if (nextStage != null)
+                    // A task program hands its payload to the mesh program, not attributes.
+                    if (nextStage != null && !nx2Task)
                     {
                         currentStage.SetNextStage(nextStage);
                     }
@@ -395,8 +429,8 @@ namespace Ryujinx.Graphics.Gpu.Shader
             bool hasGeometryShader = translatorContexts[4] != null;
             bool vertexHasStore = translatorContexts[1] != null && translatorContexts[1].HasStore;
             bool geometryHasStore = hasGeometryShader && translatorContexts[4].HasStore;
-            bool vertexToCompute = ShouldConvertVertexToCompute(_context, vertexHasStore, geometryHasStore, hasGeometryShader);
-            bool geometryToCompute = ShouldConvertGeometryToCompute(_context, geometryHasStore);
+            bool vertexToCompute = nx2Mesh == null && ShouldConvertVertexToCompute(_context, vertexHasStore, geometryHasStore, hasGeometryShader);
+            bool geometryToCompute = nx2Mesh == null && ShouldConvertGeometryToCompute(_context, geometryHasStore);
 
             CachedShaderStage[] shaders = new CachedShaderStage[Constants.ShaderStages + 1];
             List<ShaderSource> shaderSources = new();
@@ -471,7 +505,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
                     if (program != null)
                     {
                         shaderSources.Add(CreateShaderSource(program));
-                        infoBuilder.AddStageInfo(program.Info);
+                        infoBuilder.AddStageInfo(program.Info, slotIndex: nx2Mesh != null && stageIndex is 0 or 2 ? stageIndex : -1);
                     }
 
                     previousStage = currentStage;
@@ -488,11 +522,32 @@ namespace Ryujinx.Graphics.Gpu.Shader
 
             ShaderSource[] shaderSourcesArray = shaderSources.ToArray();
 
+            if (nx2Mesh != null && _nx2MeshSpirvDump != null)
+            {
+                // RYUJINX_NX2_MESH_SPV_DUMP=<dir>: the SPIR-V of task/mesh pipelines, for spirv-val.
+                System.IO.Directory.CreateDirectory(_nx2MeshSpirvDump);
+
+                foreach (ShaderSource source in shaderSourcesArray)
+                {
+                    string name = $"{addresses.VertexB:x}_{addresses.TessEvaluation:x}_{nx2Mesh.Key:x}.{source.Stage}.spv";
+
+                    System.IO.File.WriteAllBytes(System.IO.Path.Combine(_nx2MeshSpirvDump, name), source.BinaryCode);
+                }
+            }
+
             ShaderInfo info = infoBuilder.Build(pipeline);
 
             IProgram hostProgram = _context.Renderer.CreateProgram(shaderSourcesArray, info);
 
             gpShaders = new(hostProgram, vertexAsCompute, geometryAsCompute, specState, shaders);
+
+            if (nx2Mesh != null)
+            {
+                gpShaders.Nx2IsMesh = true;
+                _nx2MeshPrograms[(addresses, nx2Mesh.Key)] = gpShaders;
+
+                return gpShaders;
+            }
 
             _graphicsShaderCache.Add(gpShaders);
 
@@ -512,9 +567,11 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// Captures and lowers the Switch 2 programs of a graphics pipeline.
         /// </summary>
         /// <exception cref="Nx2.Nx2ShaderException">A program cannot be lowered</exception>
+        private static readonly string _nx2MeshSpirvDump = Environment.GetEnvironmentVariable("RYUJINX_NX2_MESH_SPV_DUMP");
+
         private static readonly bool _nx2NoTessellation = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_TESSELLATION") == "1";
 
-        private static Nx2.Nx2ShaderProgram[] Nx2GetPrograms(GpuChannel channel, ShaderAddresses addresses)
+        private static Nx2.Nx2ShaderProgram[] Nx2GetPrograms(GpuChannel channel, ShaderAddresses addresses, Nx2.Nx2MeshDraw nx2Mesh)
         {
             if (addresses.VertexA != 0)
             {
@@ -535,7 +592,9 @@ namespace Ryujinx.Graphics.Gpu.Shader
 
                 if (gpuVa != 0)
                 {
-                    programs[stageIndex] = Nx2.Nx2ShaderPrograms.Get(channel.MemoryManager, gpuVa, stageIndex);
+                    bool meshStage = nx2Mesh != null && stageIndex is 0 or 2;
+
+                    programs[stageIndex] = Nx2.Nx2ShaderPrograms.Get(channel.MemoryManager, gpuVa, stageIndex, meshStage);
                 }
             }
 

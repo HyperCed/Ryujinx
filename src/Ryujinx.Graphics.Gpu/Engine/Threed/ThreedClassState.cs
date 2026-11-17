@@ -882,7 +882,14 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         public int DrawTextureSrcY;
         public fixed uint Reserved10B0[18];
         public uint ClearFlags;
-        public fixed uint Reserved10FC[25];
+        public fixed uint Reserved10FC[20];
+
+        /// <summary>
+        /// Switch 2 (Ampere) task/mesh pipelines (clc597.h): SET_MESH_CONTROL (0x114c), SET_MESH_SHADER_A
+        /// (0x1150), SET_MESH_SHADER_B (0x1154), SET_MESH_INIT_SHADER (0x1158).
+        /// </summary>
+        public Array4<uint> Nx2MeshState;
+        public fixed uint Reserved115C[1];
         public Array32<VertexAttribState> VertexAttribState;
         public fixed uint Reserved11E0[13];
         public uint DrawVertexArrayBeginEndInstanceFirst;

@@ -641,6 +641,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     ForceStateDirty();
                 }
             }
+            else if (_drawState.Nx2MeshDraw)
+            {
+                // Task/mesh pipelines: the draw's vertex count is the number of task workgroups.
+                _context.Renderer.Pipeline.DrawMeshTasks(count, 1, 1);
+            }
             else
             {
                 if (indexed)

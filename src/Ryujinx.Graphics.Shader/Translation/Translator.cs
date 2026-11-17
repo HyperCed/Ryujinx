@@ -46,6 +46,21 @@ namespace Ryujinx.Graphics.Shader.Translation
                 definitions = CreateGraphicsDefinitions(gpuAccessor, header);
                 localMemorySize = GetLocalMemorySize(header);
 
+                Nx2MeshState meshState = gpuAccessor.QueryNx2MeshState();
+
+                if (meshState.IsTaskOrMesh)
+                {
+                    definitions.Stage = meshState.Stage;
+                    definitions.Nx2Mesh = new Nx2MeshInfo(meshState.Stage, meshState, System.Runtime.InteropServices.MemoryMarshal.AsBytes(gpuAccessor.GetCode(address, HeaderSize))[..HeaderSize])
+                    {
+                        ConvertDepth = definitions.DepthMode && !gpuAccessor.QueryHostSupportsDepthClipControl(),
+                    };
+                }
+                else if (definitions.Stage == ShaderStage.Fragment)
+                {
+                    definitions.Nx2PerPrimitiveInputs = gpuAccessor.QueryNx2PerPrimitiveInputs();
+                }
+
                 program = Decoder.Decode(definitions, gpuAccessor, address + HeaderSize);
             }
 
@@ -156,7 +171,13 @@ namespace Ryujinx.Graphics.Shader.Translation
             {
                 EmitterContext context = new(translatorContext, resourceManager, program, vertexAsCompute, index != 0);
 
-                if (initializeOutputs && index == 0)
+                bool nx2Mesh = index == 0 && context.IsNx2TaskOrMesh;
+
+                if (nx2Mesh)
+                {
+                    context.Add(Instruction.Nx2MeshPrologue);
+                }
+                else if (initializeOutputs && index == 0)
                 {
                     EmitOutputsInitialization(context, translatorContext.AttributeUsage, translatorContext.GpuAccessor, translatorContext.Stage);
                     initializationOperations = context.OperationsCount;
@@ -171,6 +192,18 @@ namespace Ryujinx.Graphics.Shader.Translation
                     context.EnterBlock(block.Address);
 
                     EmitOps(context, block);
+                }
+
+                if (nx2Mesh)
+                {
+                    // All EXITs branched here (EmitterContext.PrepareForReturn).
+                    if (context.Nx2MeshExitLabel != null)
+                    {
+                        context.MarkLabel(context.Nx2MeshExitLabel);
+                    }
+
+                    context.Add(Instruction.Nx2MeshEpilogue);
+                    context.Return();
                 }
 
                 functions[index] = new(context.GetOperations());

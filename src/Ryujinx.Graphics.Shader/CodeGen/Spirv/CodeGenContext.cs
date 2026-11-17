@@ -87,6 +87,21 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
         public bool IsMainFunction { get; private set; }
         public bool MayHaveReturned { get; set; }
+
+        /// <summary>
+        /// Switch 2 task or mesh program state (null for other programs).
+        /// </summary>
+        public Nx2MeshCodeGen Nx2Mesh { get; set; }
+
+        /// <summary>
+        /// The current block ended with a terminator other than a return (OpEmitMeshTasksEXT).
+        /// </summary>
+        public bool Nx2BlockTerminated { get; set; }
+
+        /// <summary>
+        /// The module uses SPV_EXT_mesh_shader, which needs SPIR-V 1.4 (entry points list every global they use).
+        /// </summary>
+        public bool Nx2UsesMeshShader { get; set; }
         public bool WasNonUniformAccessDeclared { get; set; }
 
         public CodeGenContext(

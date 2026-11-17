@@ -9,7 +9,17 @@ namespace Ryujinx.Graphics.Shader.Translation
     {
         private readonly GpuGraphicsState _graphicsState;
 
-        public ShaderStage Stage { get; }
+        public ShaderStage Stage { get; internal set; }
+
+        /// <summary>
+        /// Stage buffer layout of a Switch 2 task or mesh program (null for other programs).
+        /// </summary>
+        internal Nx2MeshInfo Nx2Mesh { get; set; }
+
+        /// <summary>
+        /// Fragment programs after a Switch 2 mesh program: generic inputs it writes per primitive.
+        /// </summary>
+        public int Nx2PerPrimitiveInputs { get; set; }
 
         public int ComputeLocalSizeX { get; }
         public int ComputeLocalSizeY { get; }

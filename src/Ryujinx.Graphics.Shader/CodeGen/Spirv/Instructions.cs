@@ -120,6 +120,10 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             Add(Instruction.PackHalf2x16,             GeneratePackHalf2x16);
             Add(Instruction.ReciprocalSquareRoot,     GenerateReciprocalSquareRoot);
             Add(Instruction.Return,                   GenerateReturn);
+            Add(Instruction.Nx2IsbeRead,              (context, operation) => context.Nx2Mesh.GenerateIsbeRead(context, operation));
+            Add(Instruction.Nx2IsbeWrite,             (context, operation) => context.Nx2Mesh.GenerateIsbeWrite(context, operation));
+            Add(Instruction.Nx2MeshEpilogue,          (context, operation) => context.Nx2Mesh.GenerateEpilogue(context));
+            Add(Instruction.Nx2MeshPrologue,          (context, operation) => context.Nx2Mesh.GeneratePrologue(context));
             Add(Instruction.Round,                    GenerateRound);
             Add(Instruction.ShiftLeft,                GenerateShiftLeft);
             Add(Instruction.ShiftRightS32,            GenerateShiftRightS32);
@@ -1045,6 +1049,12 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
         {
             context.MayHaveReturned = true;
 
+            if (context.Nx2BlockTerminated)
+            {
+                // OpEmitMeshTasksEXT ended the block.
+                return OperationResult.Invalid;
+            }
+
             if (operation.SourcesCount != 0)
             {
                 context.ReturnValue(context.Get(context.CurrentFunction.ReturnType, operation.GetSource(0)));
@@ -1716,7 +1726,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                         : context.Properties.StorageBuffers[bindingIndex.Value];
                     StructureField field = buffer.Type.Fields[fieldIndex.Value];
 
-                    storageClass = StorageClass.Uniform;
+                    storageClass = storageKind == StorageKind.StorageBuffer && context.Nx2UsesMeshShader ? StorageClass.StorageBuffer : StorageClass.Uniform;
                     varType = field.Type & AggregateType.ElementTypeMask;
                     baseObj = storageKind == StorageKind.ConstantBuffer
                         ? context.ConstantBuffers[bindingIndex.Value]
@@ -1801,6 +1811,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                     varType &= AggregateType.ElementTypeMask;
 
                     storageClass = isOutput ? StorageClass.Output : StorageClass.Input;
+
+                    if (!isOutput && context.Nx2Mesh != null && Nx2MeshCodeGen.IsEmulatedSubgroupInput(ioVariable))
+                    {
+                        storageClass = StorageClass.Private;
+                    }
 
                     IoDefinition ioDefinition = new(storageKind, ioVariable, location, component);
                     Dictionary<IoDefinition, SpvInstruction> dict = isPerPatch
