@@ -27,6 +27,36 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
             return null;
         }
 
+        /// <summary>
+        /// Calls <paramref name="fill"/> for the runs of pages that may hold old data (see
+        /// KMemoryRegionManager.ForEachDirtyRange); returns the number of pages that are still zero.
+        /// </summary>
+        public ulong ForEachDirtyRange(ulong address, ulong pagesCount, Action<ulong, ulong> fill)
+        {
+            ulong clean = 0;
+
+            while (pagesCount != 0)
+            {
+                KMemoryRegionManager region = GetMemoryRegion(address);
+
+                if (region == null)
+                {
+                    fill(address, pagesCount);
+
+                    return clean;
+                }
+
+                ulong countToProcess = Math.Min(pagesCount, region.GetPageOffsetFromEnd(address));
+
+                clean += region.ForEachDirtyRange(address, countToProcess, fill);
+
+                pagesCount -= countToProcess;
+                address += countToProcess * KPageTableBase.PageSize;
+            }
+
+            return clean;
+        }
+
         public void IncrementPagesReferenceCount(ulong address, ulong pagesCount)
         {
             IncrementOrDecrementPagesReferenceCount(address, pagesCount, true);
