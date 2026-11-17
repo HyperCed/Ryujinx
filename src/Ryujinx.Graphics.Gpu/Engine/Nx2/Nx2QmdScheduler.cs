@@ -137,6 +137,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                 {
                     (ulong requestAddress, uint action, uint count) = pending[i];
                     Remember(requestAddress, $"{(i == 0 ? $"ch {CurrentChannel:x}" : "dependent")} action {action} count {count}");
+                    GpuContext.Nx2WatchSemaphore(requestAddress + 52 * 4, $"QMD 0x{requestAddress:X} PCAS {(i == 0 ? $"ch {CurrentChannel:x}" : "dependent")} action {action} count {count}");
 
                     if (_states.Count >= 4096 && !_states.ContainsKey(requestAddress))
                     {
@@ -232,6 +233,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                     {
                         return "unsupported QMD version or queue";
                     }
+
+                    GpuContext.Nx2WatchSemaphore(requestAddress + 52 * 4, $"QMD 0x{requestAddress:X} executes: slot 52 0x{qmd[52]:x} 0x{qmd[53]:x} payload 0x{qmd[54]:x}");
 
                     // A program that can't run is skipped, but the QMD still completes: its releases are
                     // what other queues and the CPU wait on (the console never fails a launch).

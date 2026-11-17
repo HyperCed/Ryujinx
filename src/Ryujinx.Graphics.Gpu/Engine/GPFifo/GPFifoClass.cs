@@ -137,42 +137,44 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             if (operation == SemaphoredOperation.Release)
             {
                 _parent.MemoryManager.Write(address, value);
+
+                if (_context.Nx2Ampere)
+                {
+                    _context.Nx2NoteDirectRelease(address);
+                }
             }
             else if (operation == SemaphoredOperation.Reduction)
             {
                 bool signed = _state.State.SemaphoredFormat == SemaphoredFormat.Signed;
+                SemaphoredReduction reduction = _state.State.SemaphoredReduction;
+                int payload = value;
 
-                int mem = _parent.MemoryManager.Read<int>(address);
-
-                switch (_state.State.SemaphoredReduction)
+                int Reduce(int mem)
                 {
-                    case SemaphoredReduction.Min:
-                        value = signed ? Math.Min(mem, value) : (int)Math.Min((uint)mem, (uint)value);
-                        break;
-                    case SemaphoredReduction.Max:
-                        value = signed ? Math.Max(mem, value) : (int)Math.Max((uint)mem, (uint)value);
-                        break;
-                    case SemaphoredReduction.Xor:
-                        value ^= mem;
-                        break;
-                    case SemaphoredReduction.And:
-                        value &= mem;
-                        break;
-                    case SemaphoredReduction.Or:
-                        value |= mem;
-                        break;
-                    case SemaphoredReduction.Add:
-                        value += mem;
-                        break;
-                    case SemaphoredReduction.Inc:
-                        value = (uint)mem < (uint)value ? mem + 1 : 0;
-                        break;
-                    case SemaphoredReduction.Dec:
-                        value = (uint)mem > 0 && (uint)mem <= (uint)value ? mem - 1 : value;
-                        break;
+                    return reduction switch
+                    {
+                        SemaphoredReduction.Min => signed ? Math.Min(mem, payload) : (int)Math.Min((uint)mem, (uint)payload),
+                        SemaphoredReduction.Max => signed ? Math.Max(mem, payload) : (int)Math.Max((uint)mem, (uint)payload),
+                        SemaphoredReduction.Xor => payload ^ mem,
+                        SemaphoredReduction.And => payload & mem,
+                        SemaphoredReduction.Or => payload | mem,
+                        SemaphoredReduction.Add => payload + mem,
+                        SemaphoredReduction.Inc => (uint)mem < (uint)payload ? mem + 1 : 0,
+                        SemaphoredReduction.Dec => (uint)mem > 0 && (uint)mem <= (uint)payload ? mem - 1 : payload,
+                        _ => payload,
+                    };
                 }
 
+                int memValue = _parent.MemoryManager.Read<int>(address);
+
+                value = Reduce(memValue);
+
                 _parent.MemoryManager.Write(address, value);
+
+                if (_context.Nx2Ampere)
+                {
+                    _context.Nx2NoteCombinedRelease(address, (uint)memValue, (uint)value, current => (uint)Reduce((int)current));
+                }
             }
 
             if (_context.Nx2Ampere)
@@ -181,12 +183,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 GpuContext.Nx2WatchSemaphore(address, $"channel {operation} 0x{(uint)value:x}");
             }
 
-            if (operation is SemaphoredOperation.Release or SemaphoredOperation.Reduction &&
-                _context.Nx2TryGetSemaphoreMirror(address, out ulong mirror))
+            if (operation is SemaphoredOperation.Release or SemaphoredOperation.Reduction)
             {
                 // Switch 2 queues release progress to the second page of a semaphore region and wait
                 // (GPU acquire and CPU poll) on the same offset in the first.
-                _parent.MemoryManager.Write(mirror, value);
+                _context.Nx2WriteMirror(_parent.MemoryManager, address, (uint)value);
             }
 
             if (_context.Nx2Ampere)

@@ -365,6 +365,11 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                 return;
             }
 
+            // The kernel hands out zeroed memory; pages the system pool gave out before (a region the title
+            // destroyed and backs again) would keep their old contents. Pages never used are still zero.
+            kernel.MemoryManager.ForEachDirtyRange(physicalAddress, pages,
+                (pa, count) => process.CpuMemory.Fill(cpuAddress + (pa - physicalAddress), count * KPageTableBase.PageSize, 0));
+
             _regions[start] = (cpuAddress, size);
             Nx2GpuMemoryRegistry.MapAt(start, cpuAddress, size);
 

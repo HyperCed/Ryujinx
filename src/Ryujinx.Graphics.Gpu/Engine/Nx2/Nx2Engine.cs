@@ -198,19 +198,37 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                     }
 
                     bool fourWords = (flags >> 30) == 0;
+                    uint released = payload;
+                    System.Func<uint, uint> combine = null;
 
                     if ((flags & (1u << 26)) != 0)
                     {
-                        payload = Nx2QmdScheduler.ReduceSemaphore((flags >> 20) & 7, ((flags >> 24) & 1) != 0, memory.Read<uint>(address, tracked: true), payload);
+                        combine = current => Nx2QmdScheduler.ReduceSemaphore((flags >> 20) & 7, ((flags >> 24) & 1) != 0, current, released);
                     }
                     else if (!fourWords && (flags & (1u << 19)) != 0)
                     {
                         // NVN2 tracks QMD completion with a max release into a word other releases also
                         // advance: a plain write would move it backwards.
-                        payload = System.Math.Max(memory.Read<uint>(address, tracked: true), payload);
+                        combine = current => System.Math.Max(current, released);
+                    }
+
+                    uint before = memory.Read<uint>(address, tracked: true);
+
+                    if (combine != null)
+                    {
+                        payload = combine(before);
                     }
 
                     memory.Write(address, payload);
+
+                    if (combine != null)
+                    {
+                        _context.Nx2NoteCombinedRelease(address, before, payload, combine);
+                    }
+                    else
+                    {
+                        _context.Nx2NoteDirectRelease(address);
+                    }
                     GpuContext.Nx2RecordSemaphore("qmd", address, payload, qmdAddress);
                     GpuContext.Nx2WatchSemaphore(address, $"QMD 0x{qmdAddress:X} release 0x{payload:x} (flags 0x{flags:x})");
 
@@ -220,10 +238,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                         memory.Write(address + 8, _context.GetTimestamp());
                     }
 
-                    if (_context.Nx2TryGetSemaphoreMirror(address, out ulong mirror))
-                    {
-                        memory.Write(mirror, payload);
-                    }
+                    _context.Nx2WriteMirror(memory, address, payload);
 
                     _context.GPFifo.Nx2OnSemaphoreWritten();
 
@@ -277,14 +292,28 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                 // A counter report: no counter is kept yet.
                 payload = 0;
             }
-            else if (((control >> 3) & 1) != 0)
-            {
-                uint current = memory.Read<uint>(address, tracked: true);
+            System.Func<uint, uint> combine = null;
+            uint before = 0;
 
-                payload = Nx2QmdScheduler.ReduceSemaphore((control >> 9) & 7, false, current, payload);
+            if (operation != 2 && ((control >> 3) & 1) != 0)
+            {
+                uint released = payload;
+
+                combine = current => Nx2QmdScheduler.ReduceSemaphore((control >> 9) & 7, false, current, released);
+                before = memory.Read<uint>(address, tracked: true);
+                payload = combine(before);
             }
 
             memory.Write(address, payload);
+
+            if (combine != null)
+            {
+                _context.Nx2NoteCombinedRelease(address, before, payload, combine);
+            }
+            else
+            {
+                _context.Nx2NoteDirectRelease(address);
+            }
             GpuContext.Nx2RecordSemaphore("report", address, payload);
             GpuContext.Nx2WatchSemaphore(address, $"{_name} report semaphore release 0x{payload:x} (control 0x{control:x})");
 
@@ -294,10 +323,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                 memory.Write(address + 8, _context.GetTimestamp());
             }
 
-            if (_context.Nx2TryGetSemaphoreMirror(address, out ulong mirror))
-            {
-                memory.Write(mirror, payload);
-            }
+            _context.Nx2WriteMirror(memory, address, payload);
 
             _context.GPFifo.Nx2OnSemaphoreWritten();
         }

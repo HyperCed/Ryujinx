@@ -7,6 +7,7 @@ using Ryujinx.Graphics.Gpu.Memory;
 using Ryujinx.Graphics.Gpu.Shader;
 using Ryujinx.Graphics.Gpu.Synchronization;
 using System;
+using System.Linq;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
@@ -146,9 +147,9 @@ namespace Ryujinx.Graphics.Gpu
         /// </summary>
         internal static void Nx2RecordSemaphore(string kind, ulong address, uint value, ulong qmd = 0)
         {
-            if (kind == "acquire")
+            if (kind == "acquire" && _nx2AcquiredAddresses.TryAdd(address, 0))
             {
-                _nx2AcquiredAddresses.TryAdd(address, 0);
+                _nx2AcquiredList = [.. _nx2AcquiredAddresses.Keys];
             }
 
             int index = Interlocked.Increment(ref _nx2SemaphoreEventIndex) & (_nx2SemaphoreEvents.Length - 1);
@@ -158,14 +159,38 @@ namespace Ryujinx.Graphics.Gpu
 
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _nx2AcquiredAddresses = new();
 
+        private static volatile ulong[] _nx2AcquiredList = [];
+
         /// <summary>
-        /// Records a plain GPU write in the ring if it hits a word channels acquire on.
+        /// Records a plain GPU write (any engine: DMA, inline-to-memory, 3D reports...) in the ring if it
+        /// covers a word channels acquire on, with the phase of the GPU thread that wrote it.
         /// </summary>
-        internal static void Nx2RecordWrite(string kind, ulong address, uint value)
+        internal static void Nx2RecordWrite(ulong va, ReadOnlySpan<byte> data)
         {
-            if (_nx2AcquiredAddresses.ContainsKey(address))
+            if (_nx2SemaphoreWatch != 0 && _nx2SemaphoreWatch + 16 > va && _nx2SemaphoreWatch < va + (ulong)data.Length)
             {
-                Nx2RecordSemaphore(kind, address, value);
+                int offset = (int)Math.Max(0, (long)_nx2SemaphoreWatch - (long)va);
+                ReadOnlySpan<byte> words = data.Slice(offset, Math.Min(16, data.Length - offset));
+                string text = Convert.ToHexString(words);
+
+                Nx2WatchWrite(va, (ulong)data.Length, () => $"GPU write [{Nx2Phase}] channel {Nx2CurrentChannel:x} bytes {text} from {string.Join(" < ", Environment.StackTrace.Split('\n')[4..10].Select(l => l.Trim().Split(" in ")[0].Replace("at Ryujinx.Graphics.Gpu.", "")))}");
+            }
+
+            ulong[] acquired = _nx2AcquiredList;
+
+            if (acquired.Length == 0)
+            {
+                return;
+            }
+
+            foreach (ulong address in acquired)
+            {
+                if (address >= va && address + 4 <= va + (ulong)data.Length)
+                {
+                    uint value = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(data[(int)(address - va)..]);
+
+                    Nx2RecordSemaphore($"write[{Nx2Phase}]", address, value);
+                }
             }
         }
 
@@ -262,6 +287,68 @@ namespace Ryujinx.Graphics.Gpu
         /// Hash of the Switch 2 channel whose commands the GPU thread runs, for diagnostics.
         /// </summary>
         internal static int Nx2CurrentChannel;
+
+        /// <summary>
+        /// Writes a release's mirror into the first page of its semaphore region, or into the mirror
+        /// table when the word there also gets direct releases (<see cref="Engine.Nx2.Nx2MirrorShadow"/>).
+        /// </summary>
+        internal void Nx2WriteMirror(MemoryManager memoryManager, ulong address, uint value)
+        {
+            if (!Nx2TryGetSemaphoreMirror(address, out ulong mirror))
+            {
+                return;
+            }
+
+            if (Engine.Nx2.Nx2MirrorShadow.Diverts(mirror))
+            {
+                Engine.Nx2.Nx2MirrorShadow.Set(mirror, value, memoryManager.Read<uint>(mirror, tracked: true));
+            }
+            else
+            {
+                memoryManager.Write(mirror, value);
+            }
+        }
+
+        private bool Nx2InSemaphoreFirstPage(ulong address)
+        {
+            lock (_nx2SemaphoreRegions)
+            {
+                return _nx2SemaphoreRegions.Count != 0 && _nx2SemaphoreRegions.Contains(address & ~0xfffUL);
+            }
+        }
+
+        /// <summary>
+        /// A plain (not mirrored) release landed at <paramref name="address"/>.
+        /// </summary>
+        internal void Nx2NoteDirectRelease(ulong address)
+        {
+            if (Nx2InSemaphoreFirstPage(address))
+            {
+                Engine.Nx2.Nx2MirrorShadow.NoteDirectRelease(address);
+            }
+        }
+
+        /// <summary>
+        /// A release combining with the word it lands on (max or reduction) took it from
+        /// <paramref name="before"/> to <paramref name="after"/>.
+        /// </summary>
+        internal void Nx2NoteCombinedRelease(ulong address, uint before, uint after, Func<uint, uint> combine)
+        {
+            if (Nx2InSemaphoreFirstPage(address))
+            {
+                Engine.Nx2.Nx2MirrorShadow.NoteCombinedRelease(address, before, after, combine);
+            }
+        }
+
+        /// <summary>
+        /// The value of a semaphore word as GPU acquires see it (mirrored releases included).
+        /// </summary>
+        internal static uint Nx2ReadSemaphore(MemoryManager memoryManager, ulong address)
+        {
+            uint guest = memoryManager.Read<uint>(address, tracked: true);
+
+            return Engine.Nx2.Nx2MirrorShadow.Read(address, guest) ?? guest;
+        }
 
         internal bool Nx2TryGetSemaphoreMirror(ulong address, out ulong mirror)
         {

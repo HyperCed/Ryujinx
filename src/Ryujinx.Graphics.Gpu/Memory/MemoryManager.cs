@@ -342,6 +342,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="writeCallback">Write callback</param>
         private void WriteImpl(ulong va, ReadOnlySpan<byte> data, WriteCallback writeCallback)
         {
+            GpuContext.Nx2RecordWrite(va, data);
+
             if (IsContiguous(va, data.Length))
             {
                 writeCallback(Translate(va), data);

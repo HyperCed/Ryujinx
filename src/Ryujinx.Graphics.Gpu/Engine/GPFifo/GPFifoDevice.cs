@@ -381,6 +381,12 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                                 $"Switch 2 channel {processor.GetHashCode():x} waits for 4 s on semaphore 0x{acquire.Address:X} ({acquire.Operation} 0x{acquire.Value:x}, now 0x{processor.MemoryManager.Read<uint>(acquire.Address):x}); " +
                                 $"{queue.Count} buffers deferred, {_commandBufferQueue.Count} queued, last entries: {string.Join(" ", _nx2LastEntries)}; " +
                                 $"recent operations on it: {GpuContext.Nx2DescribeSemaphores(acquire.Address, 24)}; {_context.Nx2Qmd.Describe()}");
+
+                            if (_nx2Timeouts == 1)
+                            {
+                                Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                                    $"Switch 2 recent semaphore operations, all channels: {GpuContext.Nx2DescribeSemaphores(0, 512)}");
+                            }
                         }
 
                         if (_nx2GiveUpAcquires)

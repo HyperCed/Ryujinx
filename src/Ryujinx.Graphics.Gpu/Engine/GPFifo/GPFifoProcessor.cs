@@ -580,17 +580,14 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             {
                 MemoryManager.Write(address, payload);
                 GpuContext.Nx2RecordSemaphore("sem_execute", address, payload);
-
-                if (_context.Nx2TryGetSemaphoreMirror(address, out ulong mirror))
-                {
-                    MemoryManager.Write(mirror, payload);
-                }
+                _context.Nx2NoteDirectRelease(address);
+                _context.Nx2WriteMirror(MemoryManager, address, payload);
 
                 return;
             }
 
             // Acquires: checked once, the GPU thread is never blocked on them.
-            uint word = MemoryManager.Read<uint>(address, tracked: true);
+            uint word = GpuContext.Nx2ReadSemaphore(MemoryManager, address);
             bool ready = operation switch
             {
                 0 => word == payload,
@@ -670,8 +667,9 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
 
                 if (MemoryManager.IsMapped(address))
                 {
+                    GpuContext.Nx2Phase = "constant buffer update";
                     MemoryManager.Write(address, value);
-                    GpuContext.Nx2RecordWrite("cbuf", address, value);
+                    GpuContext.Nx2Phase = "processing";
                     GpuContext.Nx2WatchWrite(address, 4, () => $"constant buffer update 0x{value:x}");
                 }
                 else if (_nx2UnmappedUbo++ < 16)
