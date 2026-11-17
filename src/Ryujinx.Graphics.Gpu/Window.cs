@@ -218,6 +218,35 @@ namespace Ryujinx.Graphics.Gpu
 
                 pt.Cache.Tick();
 
+                if (GpuContext.Nx2PresentTrace && _presentStats % 300 == 149)
+                {
+                    lock (GpuContext.Nx2RecentTargets)
+                    {
+                        foreach ((ulong address, (WeakReference<Image.Texture> reference, int binds)) in GpuContext.Nx2RecentTargets)
+                        {
+                            if (!reference.TryGetTarget(out Image.Texture target) || target.HostTexture == null)
+                            {
+                                continue;
+                            }
+
+                            using GAL.PinnedSpan<byte> targetData = target.HostTexture.GetData();
+                            System.ReadOnlySpan<byte> targetBytes = targetData.Get();
+                            int stride = Math.Max(4, targetBytes.Length / 4096) & ~3;
+                            int nonZeroSamples = 0, samples = 0;
+
+                            for (int i = 0; i + 3 < targetBytes.Length; i += stride)
+                            {
+                                samples++;
+                                nonZeroSamples += targetBytes[i] != 0 || targetBytes[i + 1] != 0 || targetBytes[i + 2] != 0 || targetBytes[i + 3] != 0 ? 1 : 0;
+                            }
+
+                            Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Present: target 0x{address:X} {target.Info.Width}x{target.Info.Height} {target.Info.FormatInfo.Format}, bound {binds} times: {nonZeroSamples}/{samples} non-zero samples");
+                        }
+
+                        GpuContext.Nx2RecentTargets.Clear();
+                    }
+                }
+
                 if (GpuContext.Nx2PresentTrace && _presentStats++ % 300 == 150)
                 {
                     using GAL.PinnedSpan<byte> data = texture.HostTexture.GetData();

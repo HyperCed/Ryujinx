@@ -398,6 +398,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                         size = (uint)_channel.MemoryManager.GetMappedSize(sbDescriptor.PackAddress(), Constants.MaxUnknownStorageSize);
                     }
 
+                    if (_context.Nx2Ampere)
+                    {
+                        GpuContext.Nx2TraceStorageBuffer($"stage {stage}", sb.SbCbSlot, sb.SbCbOffset, _channel.MemoryManager, sbDescAddress, sbDescriptor.PackAddress(), sbDescriptor.Size, size);
+                    }
+
                     _channel.BufferManager.SetGraphicsStorageBuffer(stage, sb.Slot, sbDescriptor.PackAddress(), size, sb.Flags);
                 }
             }
@@ -519,6 +524,15 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     sizeHint);
 
                 changedScale |= _channel.TextureManager.SetRenderTargetColor(index, color);
+
+                if (GpuContext.Nx2PresentTrace && color != null && _context.Nx2Ampere)
+                {
+                    lock (GpuContext.Nx2RecentTargets)
+                    {
+                        ulong key = colorState.Address.Pack();
+                        GpuContext.Nx2RecentTargets[key] = (new WeakReference<Image.Texture>(color), GpuContext.Nx2RecentTargets.TryGetValue(key, out var entry) ? entry.Draws + 1 : 1);
+                    }
+                }
 
                 if (GpuContext.Nx2PresentTrace && color != null && _context.Nx2Ampere &&
                     _nx2TracedTargets.Add((colorState.Address.Pack(), colorState.WidthOrStride, colorState.Height, (uint)colorState.Format)))

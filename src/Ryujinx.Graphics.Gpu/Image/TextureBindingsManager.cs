@@ -5,6 +5,7 @@ using Ryujinx.Graphics.Gpu.Memory;
 using Ryujinx.Graphics.Gpu.Shader;
 using Ryujinx.Graphics.Shader;
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -40,6 +41,8 @@ namespace Ryujinx.Graphics.Gpu.Image
         private SamplerPool _cachedSamplerPool;
 
         private TextureBindingInfo[][] _textureBindings;
+        private int _nx2TextureTraces;
+        private readonly HashSet<(int, ulong)> _nx2TracedTextures = [];
         private TextureBindingInfo[][] _imageBindings;
 
         private struct TextureState
@@ -518,6 +521,15 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                 ITexture hostTexture = texture?.GetTargetTexture(bindingInfo.Target);
                 ISampler hostSampler = sampler?.GetHostSampler(texture);
+
+                if (GpuContext.Nx2PresentTrace && _context.Nx2Ampere && stage == ShaderStage.Fragment && _nx2TextureTraces < 80 &&
+                    _nx2TracedTextures.Add((textureId, descriptor.UnpackAddress())))
+                {
+                    _nx2TextureTraces++;
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                        $"Switch 2 fragment texture binding {bindingInfo.Binding}: handle c[{textureBufferIndex}][0x{bindingInfo.Handle * 4:x}] = 0x{packedId:x} -> texture {textureId} sampler {samplerId}: descriptor address 0x{descriptor.UnpackAddress():X} {descriptor.UnpackWidth()}x{descriptor.UnpackHeight()} format 0x{descriptor.UnpackFormat():x}, " +
+                        $"texture {(texture == null ? "none" : $"{texture.Info.Width}x{texture.Info.Height} {texture.Info.FormatInfo.Format} {texture.Info.Target}")}");
+                }
 
                 if (hostTexture != null && texture.Target == Target.TextureBuffer)
                 {

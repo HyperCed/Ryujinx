@@ -216,6 +216,29 @@ namespace Ryujinx.Graphics.Gpu
         internal static ulong Nx2PresentedAddress;
 
         /// <summary>
+        /// Render targets drawn since the last content report (RYUJINX_PRESENT_TRACE).
+        /// </summary>
+        internal static readonly System.Collections.Generic.Dictionary<ulong, (WeakReference<Image.Texture> Texture, int Draws)> Nx2RecentTargets = [];
+
+        private static readonly bool _nx2StorageTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_SB_TRACE") == "1";
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<(int, int, int, ulong), byte> _nx2StorageTraced = new();
+
+        /// <summary>
+        /// RYUJINX_NX2_SB_TRACE=1: logs each distinct storage buffer binding (stage, descriptor location,
+        /// address and size as read, mapped size), to check what Switch 2 constant buffers hold there.
+        /// </summary>
+        internal static void Nx2TraceStorageBuffer(string stage, int cbSlot, int cbOffset, Memory.MemoryManager memoryManager, ulong descriptorAddress, ulong address, int size, uint boundSize)
+        {
+            if (!_nx2StorageTrace || _nx2StorageTraced.Count > 400 || !_nx2StorageTraced.TryAdd((stage.GetHashCode(), cbSlot, cbOffset, address), 0))
+            {
+                return;
+            }
+
+            Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                $"Switch 2 storage buffer {stage} c[{cbSlot}][0x{cbOffset * 4:x}] (descriptor at 0x{descriptorAddress:X}): address 0x{address:X} size field 0x{size:x}, bound 0x{boundSize:x}, mapped {(address != 0 && memoryManager.IsMapped(address) ? $"0x{memoryManager.GetMappedSize(address, 0x10000000):x}" : "no")}");
+        }
+
+        /// <summary>
         /// True when Switch 2 3D methods run on the Maxwell 3D engine (RYUJINX_NX2_MAXWELL=1), so presented
         /// images hold what was drawn.
         /// </summary>

@@ -300,6 +300,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
                 SbDescriptor sbDescriptor = _channel.MemoryManager.Physical.Read<SbDescriptor>(sbDescAddress);
                 uint size = (uint)_channel.MemoryManager.GetMappedSize(sbDescriptor.PackAddress(), Constants.MaxUnknownStorageSize);
 
+                GpuContext.Nx2TraceStorageBuffer("compute", sb.SbCbSlot, sb.SbCbOffset, _channel.MemoryManager, sbDescAddress, sbDescriptor.PackAddress(), sbDescriptor.Size, size);
+
                 _channel.BufferManager.SetComputeStorageBuffer(sb.Slot, sbDescriptor.PackAddress(), size, sb.Flags);
             }
 
