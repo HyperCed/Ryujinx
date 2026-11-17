@@ -1257,6 +1257,31 @@ namespace Ryujinx.HLE.HOS.Kernel.Threading
             ReleaseAndResume();
         }
 
+        // NX2 diagnostics: the last supervisor call each guest thread made,
+        // captured on its own host thread so a stalled guest can be inspected.
+        public static readonly bool Nx2TraceSvcs = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_THREAD_DUMP") == "1";
+
+        public readonly ulong[] Nx2SvcRegs = new ulong[8];
+        public int Nx2SvcId { get; private set; } = -1;
+        public ulong Nx2SvcPc { get; private set; }
+        public ulong Nx2SvcLr { get; private set; }
+        public ulong Nx2SvcFp { get; private set; }
+        public long Nx2SvcTime { get; private set; }
+
+        public void Nx2RecordSvc(IExecutionContext context, ulong address, int id)
+        {
+            for (int i = 0; i < Nx2SvcRegs.Length; i++)
+            {
+                Nx2SvcRegs[i] = context.GetX(i);
+            }
+
+            Nx2SvcId = id;
+            Nx2SvcPc = address;
+            Nx2SvcLr = context.GetX(30);
+            Nx2SvcFp = context.GetX(29);
+            Nx2SvcTime = System.Diagnostics.Stopwatch.GetTimestamp();
+        }
+
         public string GetGuestStackTrace()
         {
             return Owner.Debugger.GetGuestStackTrace(this);

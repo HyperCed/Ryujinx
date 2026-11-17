@@ -96,7 +96,7 @@ namespace Ryujinx.Graphics.Gpu
         {
             if (_nx2SemaphoreWatch != 0 && (address & ~0xfUL) == _nx2SemaphoreWatch)
             {
-                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Semaphore watch 0x{address:X}: {operation}");
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Semaphore watch 0x{address:X}: channel {Nx2CurrentChannel:x} [{Nx2Phase}] {operation}");
             }
         }
 
@@ -115,6 +115,11 @@ namespace Ryujinx.Graphics.Gpu
         /// What the GPU thread is doing on a Switch 2 channel, for diagnostics of stalls.
         /// </summary>
         public static volatile string Nx2Phase = "idle";
+
+        /// <summary>
+        /// Hash of the Switch 2 channel whose commands the GPU thread runs, for diagnostics.
+        /// </summary>
+        internal static int Nx2CurrentChannel;
 
         internal bool Nx2TryGetSemaphoreMirror(ulong address, out ulong mirror)
         {

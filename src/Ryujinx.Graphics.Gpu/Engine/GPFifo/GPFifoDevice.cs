@@ -1,3 +1,4 @@
+using System.Linq;
 using Ryujinx.Graphics.Gpu.Memory;
 using System;
 using System.Collections.Concurrent;
@@ -192,10 +193,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 if (_context.Nx2Ampere && commandBuffer.Type == CommandBufferType.Prefetch && _nx2Snapshot &&
                     processor.MemoryManager.IsMapped(commandBuffer.EntryAddress))
                 {
-                    // The game refills command memory it already submitted once the GPU thread falls behind:
-                    // keep the words as submitted. Entries the channel suspends before are read again then,
-                    // since the CPU writes the commands behind an acquire before it releases it.
-                    // RYUJINX_NX2_PB_SNAPSHOT=0 always reads them when they run.
+                    // The game refills command memory it already submitted once the GPU thread falls behind
+                    // (its command rings are reused as soon as the submission is made), so the words are kept
+                    // as submitted, also for entries that run after a suspension.
+                    // RYUJINX_NX2_PB_REREAD=1 reads entries again after a suspension (RYUJINX_NX2_PB_COMPARE=1
+                    // logs when that differs); RYUJINX_NX2_PB_SNAPSHOT=0 always reads them when they run.
                     commandBuffer.SnapshotSuspensions = processor.Nx2Suspensions;
                     commandBuffer.Prefetch(processor.MemoryManager);
                 }
@@ -322,6 +324,10 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
 
         private static readonly bool _nx2GiveUpAcquires = Environment.GetEnvironmentVariable("RYUJINX_NX2_ACQUIRE_TIMEOUT") == "1";
 
+        private static readonly bool _nx2Reread = Environment.GetEnvironmentVariable("RYUJINX_NX2_PB_REREAD") == "1";
+        private static readonly bool _nx2Compare = Environment.GetEnvironmentVariable("RYUJINX_NX2_PB_COMPARE") == "1";
+        private int _nx2CompareReports;
+
         private static readonly bool _nx2Snapshot = Environment.GetEnvironmentVariable("RYUJINX_NX2_PB_SNAPSHOT") != "0";
 
         private static readonly System.IO.BinaryWriter _nx2Dump = Environment.GetEnvironmentVariable("RYUJINX_NX2_GPFIFO_DUMP") is { Length: > 0 } path
@@ -436,10 +442,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 return !processor.Nx2IsSuspended;
             }
 
-            if (entry.Words != null && entry.EntryAddress != ulong.MaxValue &&
+            int[] snapshot = null;
+
+            if (entry.Words != null && entry.EntryAddress != ulong.MaxValue && _nx2Reread &&
                 (entry.ResumeIndex != 0 || entry.SnapshotSuspensions != processor.Nx2Suspensions))
             {
-                // Suspended since the copy: the words may be new.
+                // RYUJINX_NX2_PB_REREAD=1: suspended since the copy, read the words again.
+                snapshot = entry.Words;
                 entry.Words = null;
             }
 
@@ -453,9 +462,22 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             }
             else
             {
-                // Read again after a suspension: the CPU writes the commands behind an acquire before it
-                // releases the semaphore.
+                // Entries without a copy, or read again after a suspension (RYUJINX_NX2_PB_REREAD=1).
                 words = MemoryMarshal.Cast<byte, int>(processor.MemoryManager.GetSpan(entry.EntryAddress, (int)entry.EntryCount * 4, true));
+
+                if (snapshot != null && _nx2Compare && !words.SequenceEqual(snapshot) && _nx2CompareReports++ < 64)
+                {
+                    int first = 0;
+
+                    while (first < words.Length && first < snapshot.Length && words[first] == snapshot[first])
+                    {
+                        first++;
+                    }
+
+                    Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                        $"Switch 2 channel {processor.GetHashCode():x} entry 0x{entry.EntryAddress:x}+{words.Length} (resume {entry.ResumeIndex}) changed since submission from word {first}: " +
+                        $"was {string.Join(",", snapshot[first..Math.Min(snapshot.Length, first + 8)].Select(x => x.ToString("x")))} now {string.Join(",", words[first..Math.Min(words.Length, first + 8)].ToArray().Select(x => x.ToString("x")))}");
+                }
             }
 
             if (_prevChannelProcessor != processor)

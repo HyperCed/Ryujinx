@@ -96,15 +96,24 @@ namespace Ryujinx.Graphics.Gpu.Synchronization
                 timeout = TimeSpan.FromSeconds(1);
             }
 
-            using ManualResetEvent waitEvent = new(false);
+            ManualResetEvent waitEvent = new(false);
             SyncpointWaiterHandle info = _syncpoints[id].RegisterCallback(threshold, _ => waitEvent.Set());
 
             if (info == null)
             {
+                waitEvent.Dispose();
+
                 return false;
             }
 
             bool signaled = waitEvent.WaitOne(timeout);
+
+            // On a timeout, an increment may still run the callback after it is unregistered,
+            // so the event is then left to the finalizer instead of being disposed under it.
+            if (signaled)
+            {
+                waitEvent.Dispose();
+            }
 
             if (!signaled)
             {

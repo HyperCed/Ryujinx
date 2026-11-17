@@ -26,6 +26,9 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
         private readonly Dictionary<uint, KEvent> _events = [];
         private readonly Dictionary<uint, SlotRequest> _requests = [];
 
+        // Diagnostics (RYUJINX_NX2_THREAD_DUMP=1): the pending slot requests (slot -> syncpoint, threshold).
+        public static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, (uint Syncpoint, ulong Value)> Nx2Pending = new();
+
         public string InterfaceName => "nx2:syncpt";
 
         public bool IsZeroedCommand(int commandId) => commandId == 21;
@@ -113,6 +116,11 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
 
                 request = new SlotRequest { Syncpoint = syncpoint, Pending = true };
                 _requests[slot] = request;
+
+                if (KThread.Nx2TraceSvcs)
+                {
+                    Nx2Pending[slot] = (syncpoint, value);
+                }
             }
 
             // The callback runs on the thread that reaches the value, or inline if it is already reached.
@@ -126,6 +134,11 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                     }
 
                     request.Pending = false;
+                }
+
+                if (KThread.Nx2TraceSvcs)
+                {
+                    Nx2Pending.TryRemove(slot, out var _removed);
                 }
 
                 evt.WritableEvent.Signal();

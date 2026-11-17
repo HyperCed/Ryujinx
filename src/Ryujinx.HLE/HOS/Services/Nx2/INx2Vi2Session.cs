@@ -3,6 +3,7 @@ using Ryujinx.HLE.HOS.Kernel.Threading;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 
 namespace Ryujinx.HLE.HOS.Services.Nx2
@@ -232,7 +233,7 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
             uint fenceValue = w[22];
             Ryujinx.Graphics.Gpu.GpuContext gpu = context.Device.Gpu;
 
-            WaitForFrame(gpu, fenceId, fenceValue);
+            WaitForFrame(gpu, fenceId, fenceValue, context.Device);
 
             _previousFenceId = fenceId;
             _previousFenceValue = fenceValue;
@@ -249,7 +250,7 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
         // Waits for this frame's fence, or only for the previous frame's while a channel is suspended on a
         // semaphore: the CPU may release it only after this present returns. Checked again while waiting,
         // since a channel can suspend after the wait started.
-        private void WaitForFrame(Ryujinx.Graphics.Gpu.GpuContext gpu, uint fenceId, uint fenceValue)
+        private void WaitForFrame(Ryujinx.Graphics.Gpu.GpuContext gpu, uint fenceId, uint fenceValue, Switch device)
         {
             const uint MaxSyncpoints = Ryujinx.Graphics.Gpu.Synchronization.SynchronizationManager.MaxHardwareSyncpoints;
 
@@ -276,6 +277,21 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                     if (_fenceTimeouts++ < 16)
                     {
                         Logger.Warning?.Print(LogClass.ServiceVi, $"nx2:vi2 present: fence ({id}, 0x{value:x}) not reached in 4 s, now 0x{gpu.Synchronization.GetSyncpointValue(id):x}; GPU thread: {Ryujinx.Graphics.Gpu.GpuContext.Nx2Phase}; {gpu.GPFifo.Nx2Describe()}");
+
+                        // RYUJINX_NX2_THREAD_DUMP=1: what every guest thread waits on, now and twice more later.
+                        if (_fenceTimeouts == 1 && KThread.Nx2TraceSvcs)
+                        {
+                            new Thread(() =>
+                            {
+                                for (int dump = 0; dump < 3; dump++)
+                                {
+                                    string threads = device.Processes.ActiveApplication is { } app && device.System.KernelContext.Processes.TryGetValue(app.ProcessId, out var process) ? process.Debugger.Nx2DumpThreads() : "no application";
+                                    string pending = string.Join(", ", INx2SyncptSession.Nx2Pending.Select(x => $"slot {x.Key}: syncpt {x.Value.Syncpoint} >= 0x{x.Value.Value:x} (now 0x{gpu.Synchronization.GetSyncpointValue(x.Value.Syncpoint):x})"));
+                                    Logger.Warning?.Print(LogClass.ServiceVi, $"nx2 guest threads (dump {dump}), syncpoint waits: {pending}\n{threads}");
+                                    Thread.Sleep(8000);
+                                }
+                            }) { IsBackground = true, Name = "Nx2.ThreadDump" }.Start();
+                        }
                     }
 
                     return;

@@ -978,6 +978,14 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
             KernelStatic.GetCurrentThread().Exit();
         }
 
+        public List<KThread> Nx2SnapshotThreads()
+        {
+            lock (_threadingLock)
+            {
+                return [.. _threads];
+            }
+        }
+
         private void UnpauseAndTerminateAllThreadsExcept(KThread currentThread)
         {
             lock (_threadingLock)
@@ -1092,12 +1100,19 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
             MemoryManager = new KPageTable(KernelContext, CpuMemory, Context.AddressSpaceSize);
         }
 
+        private static int _nx2InvalidAccessTraces;
+
         private static bool InvalidAccessHandler(ulong va)
         {
             KernelStatic.GetCurrentThread()?.PrintGuestStackTrace();
             KernelStatic.GetCurrentThread()?.PrintGuestRegisterPrintout();
 
             Logger.Error?.Print(LogClass.Cpu, $"Invalid memory access at virtual address 0x{va:X16}.");
+
+            if (KThread.Nx2TraceSvcs && KernelStatic.GetCurrentThread() == null && _nx2InvalidAccessTraces++ < 3)
+            {
+                Logger.Error?.Print(LogClass.Cpu, $"Host stack: {System.Environment.StackTrace}");
+            }
 
             Logger.Flush();
 

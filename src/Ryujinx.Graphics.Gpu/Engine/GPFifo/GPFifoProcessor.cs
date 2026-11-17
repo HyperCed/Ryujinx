@@ -411,6 +411,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         /// <returns>Index of the next word to process; the length of the buffer once it is done</returns>
         public int Nx2Process(ulong baseGpuVa, ReadOnlySpan<int> commandBuffer, int start)
         {
+            GpuContext.Nx2CurrentChannel = GetHashCode();
+
             // A method's data continues across GP entries, whatever their level: NVN2 ends a main entry
             // after a macro's first word and supplies the remaining parameters in a subroutine entry.
             // RYUJINX_NX2_PARK_SPLIT_METHODS restores the older guess (an entry elsewhere is a call that
