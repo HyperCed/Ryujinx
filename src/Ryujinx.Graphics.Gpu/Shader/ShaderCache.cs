@@ -338,6 +338,9 @@ namespace Ryujinx.Graphics.Gpu.Shader
 
             TargetApi api = _context.Capabilities.Api;
 
+            // Switch 2 programs are lowered to Maxwell code, which the translator reads in their place.
+            Nx2.Nx2ShaderProgram[] nx2Programs = _context.Nx2Ampere ? Nx2GetPrograms(channel, addresses) : null;
+
             for (int stageIndex = Constants.ShaderStages - 1; stageIndex >= 0; stageIndex--)
             {
                 ulong gpuVa = addressesSpan[stageIndex + 1];
@@ -345,6 +348,12 @@ namespace Ryujinx.Graphics.Gpu.Shader
                 if (gpuVa != 0)
                 {
                     GpuAccessor gpuAccessor = new(_context, channel, gpuAccessorState, stageIndex, addresses.Geometry != 0);
+
+                    if (nx2Programs != null)
+                    {
+                        gpuAccessor.Nx2SetCode(gpuVa, nx2Programs[stageIndex].LoweredCode);
+                    }
+
                     TranslatorContext currentStage = DecodeGraphicsShader(gpuAccessor, api, DefaultFlags, gpuVa);
 
                     if (nextStage != null)
@@ -412,7 +421,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
                     }
                     else
                     {
-                        byte[] code = cachedGuestCode.GetByIndex(stageIndex);
+                        byte[] code = nx2Programs != null ? nx2Programs[stageIndex].NativeCode : cachedGuestCode.GetByIndex(stageIndex);
 
                         TranslatedShader translatedShader = TranslateShader(_dumper, channel, currentStage, code, asCompute);
 
@@ -468,7 +477,8 @@ namespace Ryujinx.Graphics.Gpu.Shader
             _graphicsShaderCache.Add(gpShaders);
 
             // We don't currently support caching shaders that have been converted to compute.
-            if (vertexAsCompute == null)
+            // Switch 2 programs are not kept on disk: the cache would translate their native code as Maxwell code.
+            if (vertexAsCompute == null && nx2Programs == null)
             {
                 EnqueueProgramToSave(gpShaders, hostProgram, shaderSourcesArray);
             }
@@ -476,6 +486,33 @@ namespace Ryujinx.Graphics.Gpu.Shader
             _gpPrograms[addresses] = gpShaders;
 
             return gpShaders;
+        }
+
+        /// <summary>
+        /// Captures and lowers the Switch 2 programs of a graphics pipeline.
+        /// </summary>
+        /// <exception cref="Nx2.Nx2ShaderException">A program cannot be lowered</exception>
+        private static Nx2.Nx2ShaderProgram[] Nx2GetPrograms(GpuChannel channel, ShaderAddresses addresses)
+        {
+            if (addresses.VertexA != 0)
+            {
+                throw new Nx2.Nx2ShaderException("Switch 2 pipeline with a vertex A program");
+            }
+
+            ReadOnlySpan<ulong> addressesSpan = addresses.AsSpan();
+            Nx2.Nx2ShaderProgram[] programs = new Nx2.Nx2ShaderProgram[Constants.ShaderStages];
+
+            for (int stageIndex = 0; stageIndex < Constants.ShaderStages; stageIndex++)
+            {
+                ulong gpuVa = addressesSpan[stageIndex + 1];
+
+                if (gpuVa != 0)
+                {
+                    programs[stageIndex] = Nx2.Nx2ShaderPrograms.Get(channel.MemoryManager, gpuVa, stageIndex);
+                }
+            }
+
+            return programs;
         }
 
         /// <summary>

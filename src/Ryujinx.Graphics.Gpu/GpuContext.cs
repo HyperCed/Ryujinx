@@ -92,6 +92,69 @@ namespace Ryujinx.Graphics.Gpu
         /// <summary>
         /// RYUJINX_NX2_SEM_WATCH=&lt;hex GPU address&gt;: logs every Switch 2 semaphore operation on the 16 bytes there.
         /// </summary>
+        private struct Nx2SemaphoreEvent
+        {
+            public int Channel;
+            public ulong Address;
+            public uint Value;
+            public ulong Qmd;
+            public string Kind;
+        }
+
+        private static readonly Nx2SemaphoreEvent[] _nx2SemaphoreEvents = new Nx2SemaphoreEvent[512];
+        private static int _nx2SemaphoreEventIndex;
+
+        /// <summary>
+        /// Records a Switch 2 semaphore operation in a ring of recent ones, cheaply, for stall reports.
+        /// </summary>
+        internal static void Nx2RecordSemaphore(string kind, ulong address, uint value, ulong qmd = 0)
+        {
+            if (kind == "acquire")
+            {
+                _nx2AcquiredAddresses.TryAdd(address, 0);
+            }
+
+            int index = Interlocked.Increment(ref _nx2SemaphoreEventIndex) & (_nx2SemaphoreEvents.Length - 1);
+
+            _nx2SemaphoreEvents[index] = new Nx2SemaphoreEvent { Channel = Nx2CurrentChannel, Address = address, Value = value, Qmd = qmd, Kind = kind };
+        }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _nx2AcquiredAddresses = new();
+
+        /// <summary>
+        /// Records a plain GPU write in the ring if it hits a word channels acquire on.
+        /// </summary>
+        internal static void Nx2RecordWrite(string kind, ulong address, uint value)
+        {
+            if (_nx2AcquiredAddresses.ContainsKey(address))
+            {
+                Nx2RecordSemaphore(kind, address, value);
+            }
+        }
+
+        /// <summary>
+        /// The recent semaphore operations on <paramref name="address"/> (or all if 0), oldest first.
+        /// </summary>
+        internal static string Nx2DescribeSemaphores(ulong address, int count)
+        {
+            System.Collections.Generic.List<string> lines = [];
+            int last = _nx2SemaphoreEventIndex;
+
+            for (int i = 0; i < _nx2SemaphoreEvents.Length && lines.Count < count; i++)
+            {
+                Nx2SemaphoreEvent e = _nx2SemaphoreEvents[(last - i) & (_nx2SemaphoreEvents.Length - 1)];
+
+                if (e.Kind != null && (address == 0 || e.Address == address))
+                {
+                    lines.Add($"{e.Channel:x} {e.Kind} 0x{e.Address:X}={e.Value:x}{(e.Qmd != 0 ? $" qmd 0x{e.Qmd:X}" : "")}");
+                }
+            }
+
+            lines.Reverse();
+
+            return string.Join("; ", lines);
+        }
+
         internal static void Nx2WatchSemaphore(ulong address, string operation)
         {
             if (_nx2SemaphoreWatch != 0 && (address & ~0xfUL) == _nx2SemaphoreWatch)

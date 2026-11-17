@@ -115,6 +115,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                     // NVN2 gates each command buffer with an acquire the CPU releases after writing it:
                     // reading past an unmet one runs stale commands. The channel is suspended instead.
                     Nx2PendingAcquire acquire = new(address, (uint)value, operation);
+                    GpuContext.Nx2RecordSemaphore("acquire", address, (uint)value);
                     GpuContext.Nx2WatchSemaphore(address, $"channel acquire {operation} 0x{value:x} (now 0x{_parent.MemoryManager.Read<uint>(address):x})");
 
                     if (!acquire.IsMet(_parent.MemoryManager))
@@ -176,6 +177,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
 
             if (_context.Nx2Ampere)
             {
+                GpuContext.Nx2RecordSemaphore("release", address, (uint)value);
                 GpuContext.Nx2WatchSemaphore(address, $"channel {operation} 0x{(uint)value:x}");
             }
 
@@ -185,6 +187,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 // Switch 2 queues release progress to the second page of a semaphore region and wait
                 // (GPU acquire and CPU poll) on the same offset in the first.
                 _parent.MemoryManager.Write(mirror, value);
+            }
+
+            if (_context.Nx2Ampere)
+            {
+                _context.GPFifo.Nx2OnSemaphoreWritten();
             }
         }
 

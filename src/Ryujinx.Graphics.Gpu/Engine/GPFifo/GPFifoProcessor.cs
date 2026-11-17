@@ -571,6 +571,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             if (operation == 1) // RELEASE
             {
                 MemoryManager.Write(address, payload);
+                GpuContext.Nx2RecordSemaphore("sem_execute", address, payload);
 
                 if (_context.Nx2TryGetSemaphoreMirror(address, out ulong mirror))
                 {
@@ -654,6 +655,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 if (MemoryManager.IsMapped(address))
                 {
                     MemoryManager.Write(address, value);
+                    GpuContext.Nx2RecordWrite("cbuf", address, value);
                     GpuContext.Nx2WatchWrite(address, 4, () => $"constant buffer update 0x{value:x}");
                 }
                 else if (_nx2UnmappedUbo++ < 16)

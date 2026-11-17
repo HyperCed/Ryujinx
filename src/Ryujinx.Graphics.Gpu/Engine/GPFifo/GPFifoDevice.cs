@@ -341,6 +341,20 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         /// </summary>
         public bool Nx2HasSuspendedChannels => _nx2DeferredOrder.Count != 0;
 
+        /// <summary>
+        /// Switch 2: checks the suspended channels after the GPU wrote a semaphore. An acquire is met
+        /// as soon as the value is reached: the CPU may move it again (back to zero for the next frame)
+        /// before the channel would otherwise be looked at.
+        /// </summary>
+        public void Nx2OnSemaphoreWritten()
+        {
+            foreach (GPFifoProcessor processor in _nx2DeferredOrder)
+            {
+                // Clears the pending acquire when it is met.
+                _ = processor.Nx2IsSuspended;
+            }
+        }
+
         private void Nx2DispatchCalls()
         {
             bool progress = true;
@@ -365,7 +379,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                         {
                             Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
                                 $"Switch 2 channel {processor.GetHashCode():x} waits for 4 s on semaphore 0x{acquire.Address:X} ({acquire.Operation} 0x{acquire.Value:x}, now 0x{processor.MemoryManager.Read<uint>(acquire.Address):x}); " +
-                                $"{queue.Count} buffers deferred, {_commandBufferQueue.Count} queued, last entries: {string.Join(" ", _nx2LastEntries)}");
+                                $"{queue.Count} buffers deferred, {_commandBufferQueue.Count} queued, last entries: {string.Join(" ", _nx2LastEntries)}; " +
+                                $"recent operations on it: {GpuContext.Nx2DescribeSemaphores(acquire.Address, 24)}; {_context.Nx2Qmd.Describe()}");
                         }
 
                         if (_nx2GiveUpAcquires)

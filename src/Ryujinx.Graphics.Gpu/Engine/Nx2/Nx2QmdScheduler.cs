@@ -69,6 +69,31 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
         }
 
         /// <summary>
+        /// The QMDs that are waiting (loaded or deferred, not completed), for stall reports.
+        /// </summary>
+        public string Describe()
+        {
+            lock (_states)
+            {
+                List<string> waiting = [];
+                int completed = 0;
+
+                foreach ((ulong key, State state) in _states)
+                {
+                    if (state.Completed && state.Deferred == 0)
+                    {
+                        completed++;
+                        continue;
+                    }
+
+                    waiting.Add($"0x{key:X}(deps {state.Dependencies}, deferred {state.Deferred}{(state.Loaded ? ", loaded" : "")}{(state.Scheduled ? ", scheduled" : "")}{(state.Completed ? ", completed" : "")})");
+                }
+
+                return $"{completed} QMDs done, {waiting.Count} waiting: {string.Join(" ", waiting.GetRange(0, Math.Min(waiting.Count, 40)))}";
+            }
+        }
+
+        /// <summary>
         /// Handles a PCAS signal on a QMD.
         /// </summary>
         /// <param name="address">GPU virtual address of the QMD</param>

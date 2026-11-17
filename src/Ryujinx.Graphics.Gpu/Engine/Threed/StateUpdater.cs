@@ -1436,8 +1436,38 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         // and every later draw with them is skipped without decoding them again.
         private static readonly System.Collections.Generic.HashSet<ShaderAddresses> _nx2RejectedPrograms = [];
 
+        private void Nx2DumpPrograms(ShaderAddresses addresses)
+        {
+            if (Environment.GetEnvironmentVariable("RYUJINX_NX2_SHADER_DUMP") == null)
+            {
+                return;
+            }
+
+            ReadOnlySpan<ulong> stageAddresses = [addresses.VertexA, addresses.VertexB, addresses.TessControl, addresses.TessEvaluation, addresses.Geometry, addresses.Fragment];
+            ReadOnlySpan<string> stageNames = ["vsa", "vs", "tcs", "tes", "gs", "fs"];
+
+            for (int index = 0; index < stageAddresses.Length; index++)
+            {
+                ulong address = stageAddresses[index];
+
+                if (address == 0)
+                {
+                    continue;
+                }
+
+                Shader.Nx2.Nx2Instruction[] code = Shader.Nx2.Nx2NativeProgram.Capture(_channel.MemoryManager, address, Shader.Nx2.Nx2NativeProgram.GraphicsHeaderSize, out _);
+
+                if (code != null)
+                {
+                    Shader.Nx2.Nx2NativeProgram.Dump(_channel.MemoryManager, address, Shader.Nx2.Nx2NativeProgram.GraphicsHeaderSize, stageNames[index], code);
+                }
+            }
+        }
+
         private CachedShaderProgram Nx2GetGraphicsShader(ShaderCache shaderCache, int samplerPoolMaximumId, ShaderAddresses addresses)
         {
+            Nx2DumpPrograms(addresses);
+
             lock (_nx2RejectedPrograms)
             {
                 if (_nx2RejectedPrograms.Contains(addresses))

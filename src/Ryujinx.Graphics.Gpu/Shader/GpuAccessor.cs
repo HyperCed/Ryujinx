@@ -63,6 +63,19 @@ namespace Ryujinx.Graphics.Gpu.Shader
             _compute = true;
         }
 
+        private ulong _nx2CodeAddress;
+        private byte[] _nx2Code;
+
+        /// <summary>
+        /// Makes the translator read <paramref name="code"/> (a lowered Switch 2 program) at
+        /// <paramref name="address"/> instead of guest memory.
+        /// </summary>
+        public void Nx2SetCode(ulong address, byte[] code)
+        {
+            _nx2CodeAddress = address;
+            _nx2Code = code;
+        }
+
         /// <inheritdoc/>
         public uint ConstantBuffer1Read(int offset)
         {
@@ -82,6 +95,12 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <inheritdoc/>
         public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize)
         {
+            if (_nx2Code != null && address >= _nx2CodeAddress && address - _nx2CodeAddress < (ulong)_nx2Code.Length)
+            {
+                // Switch 2: the lowered program stands in for the native one at its address.
+                return MemoryMarshal.Cast<byte, ulong>(_nx2Code.AsSpan((int)(address - _nx2CodeAddress) & ~7));
+            }
+
             int size = Math.Max(minimumSize, 0x1000 - (int)(address & 0xfff));
 
             return MemoryMarshal.Cast<byte, ulong>(_channel.MemoryManager.GetSpan(address, size));

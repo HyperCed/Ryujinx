@@ -204,6 +204,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                     }
 
                     memory.Write(address, payload);
+                    GpuContext.Nx2RecordSemaphore("qmd", address, payload, qmdAddress);
                     GpuContext.Nx2WatchSemaphore(address, $"QMD 0x{qmdAddress:X} release 0x{payload:x} (flags 0x{flags:x})");
 
                     if (fourWords && (flags & (1u << 26)) == 0)
@@ -216,6 +217,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                     {
                         memory.Write(mirror, payload);
                     }
+
+                    _context.GPFifo.Nx2OnSemaphoreWritten();
 
                     return true;
                 },
@@ -275,6 +278,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
             }
 
             memory.Write(address, payload);
+            GpuContext.Nx2RecordSemaphore("report", address, payload);
             GpuContext.Nx2WatchSemaphore(address, $"{_name} report semaphore release 0x{payload:x} (control 0x{control:x})");
 
             if (!oneWord)
@@ -287,6 +291,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
             {
                 memory.Write(mirror, payload);
             }
+
+            _context.GPFifo.Nx2OnSemaphoreWritten();
         }
 
         /// <summary>
