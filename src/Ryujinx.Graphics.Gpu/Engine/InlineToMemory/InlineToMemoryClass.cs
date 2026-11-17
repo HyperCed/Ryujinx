@@ -187,6 +187,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.InlineToMemory
 
             Span<byte> data = MemoryMarshal.Cast<int, byte>(new Span<int>(_buffer))[.._size];
 
+            if (_context.Nx2Ampere)
+            {
+                GpuContext.Nx2WatchWrite(_dstGpuVa, (ulong)_size, () => $"inline-to-memory #{GetHashCode():x} {Environment.StackTrace.Split('\n')[3].Trim()} ({_lineLengthIn} x {_lineCount}, first word 0x{(_size >= 4 ? _buffer[0] : 0):x}, words {string.Join(",", Array.ConvertAll(_buffer[..Math.Min(_size / 4, 32)], x => x.ToString("x")))})");
+            }
+
             if (_isLinear && _lineCount == 1)
             {
                 memoryManager.WriteTrackedResource(_dstGpuVa, data[.._lineLengthIn]);

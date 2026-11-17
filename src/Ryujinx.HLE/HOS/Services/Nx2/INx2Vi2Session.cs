@@ -224,9 +224,70 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                 Logger.Stub?.PrintStub(LogClass.ServiceVi, new { presents = _presents, image = w[3] });
             }
 
+            // Wait for this frame's fence (syncpoint ~word 20, value word 22), so the game doesn't write the
+            // next frame's data (QMDs, constants, command memory) while the GPU thread still reads this
+            // frame's. While a channel waits on a semaphore the CPU releases after this present, wait for the
+            // previous frame's fence instead and let the game prepare the next one meanwhile.
+            uint fenceId = ~w[20];
+            uint fenceValue = w[22];
+            Ryujinx.Graphics.Gpu.GpuContext gpu = context.Device.Gpu;
+
+            WaitForFrame(gpu, fenceId, fenceValue);
+
+            _previousFenceId = fenceId;
+            _previousFenceValue = fenceValue;
+
             Nx2Tipc.Reply64(context, AvailableSlots, 0, 0);
 
             return ResultCode.Success;
+        }
+
+        private uint _previousFenceId = uint.MaxValue;
+        private uint _previousFenceValue;
+        private int _fenceTimeouts;
+
+        // Waits for this frame's fence, or only for the previous frame's while a channel is suspended on a
+        // semaphore: the CPU may release it only after this present returns. Checked again while waiting,
+        // since a channel can suspend after the wait started.
+        private void WaitForFrame(Ryujinx.Graphics.Gpu.GpuContext gpu, uint fenceId, uint fenceValue)
+        {
+            const uint MaxSyncpoints = Ryujinx.Graphics.Gpu.Synchronization.SynchronizationManager.MaxHardwareSyncpoints;
+
+            if (fenceId >= MaxSyncpoints)
+            {
+                return;
+            }
+
+            long deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 4;
+
+            while (true)
+            {
+                bool gpuWaits = gpu.GPFifo.Nx2HasSuspendedChannels;
+                uint id = gpuWaits ? _previousFenceId : fenceId;
+                uint value = gpuWaits ? _previousFenceValue : fenceValue;
+
+                if (id >= MaxSyncpoints || IsReached(gpu, id, value))
+                {
+                    return;
+                }
+
+                if (Stopwatch.GetTimestamp() > deadline)
+                {
+                    if (_fenceTimeouts++ < 16)
+                    {
+                        Logger.Warning?.Print(LogClass.ServiceVi, $"nx2:vi2 present: fence ({id}, 0x{value:x}) not reached in 4 s, now 0x{gpu.Synchronization.GetSyncpointValue(id):x}; GPU thread: {Ryujinx.Graphics.Gpu.GpuContext.Nx2Phase}; {gpu.GPFifo.Nx2Describe()}");
+                    }
+
+                    return;
+                }
+
+                gpu.Synchronization.WaitOnSyncpoint(id, value, TimeSpan.FromMilliseconds(2), quiet: true);
+            }
+        }
+
+        private static bool IsReached(Ryujinx.Graphics.Gpu.GpuContext gpu, uint id, uint value)
+        {
+            return (int)(gpu.Synchronization.GetSyncpointValue(id) - value) >= 0;
         }
 
         private ResultCode ReplyNativeEvent(ServiceCtx context, uint index)

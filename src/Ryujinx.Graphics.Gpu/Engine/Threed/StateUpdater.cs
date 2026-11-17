@@ -1432,6 +1432,50 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             _currentSpecState.SetEarlyZForce(_state.State.EarlyZForce);
         }
 
+        // Switch 2 programs whose translation failed, by their stage addresses: each is rejected once,
+        // and every later draw with them is skipped without decoding them again.
+        private static readonly System.Collections.Generic.HashSet<ShaderAddresses> _nx2RejectedPrograms = [];
+
+        private CachedShaderProgram Nx2GetGraphicsShader(ShaderCache shaderCache, int samplerPoolMaximumId, ShaderAddresses addresses)
+        {
+            lock (_nx2RejectedPrograms)
+            {
+                if (_nx2RejectedPrograms.Contains(addresses))
+                {
+                    throw new Nx2DrawSkippedException();
+                }
+            }
+
+            try
+            {
+                return shaderCache.GetGraphicsShader(
+                    ref _state.State,
+                    ref _pipeline,
+                    _channel,
+                    samplerPoolMaximumId,
+                    ref _currentSpecState.GetPoolState(),
+                    ref _currentSpecState.GetGraphicsState(),
+                    addresses);
+            }
+            catch (Exception exception) when (exception is not Nx2DrawSkippedException)
+            {
+                int count;
+
+                lock (_nx2RejectedPrograms)
+                {
+                    _nx2RejectedPrograms.Add(addresses);
+                    count = _nx2RejectedPrograms.Count;
+                }
+
+                if (count <= 32 || count % 100 == 0)
+                {
+                    Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 graphics program rejected ({count} so far): VS 0x{addresses.VertexB:X} FS 0x{addresses.Fragment:X}: {exception.GetType().Name}: {exception.Message}");
+                }
+
+                throw new Nx2DrawSkippedException();
+            }
+        }
+
         /// <summary>
         /// Updates host shaders based on the guest GPU state.
         /// </summary>
@@ -1455,21 +1499,34 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     continue;
                 }
 
-                addressesSpan[index] = baseAddress + shader.Offset;
+                // Switch 2 (Ampere) pipelines carry a full program address instead of an offset into the
+                // program region.
+                addressesSpan[index] = _context.Nx2Ampere
+                    ? ((ulong)(shader.Unknown0x14 & 0xff) << 32) | shader.Unknown0x18
+                    : baseAddress + shader.Offset;
             }
 
             int samplerPoolMaximumId = _state.State.SamplerIndex == SamplerIndex.ViaHeaderIndex
                 ? _state.State.TexturePoolState.MaximumId
                 : _state.State.SamplerPoolState.MaximumId;
 
-            CachedShaderProgram gs = shaderCache.GetGraphicsShader(
-                ref _state.State,
-                ref _pipeline,
-                _channel,
-                samplerPoolMaximumId,
-                ref _currentSpecState.GetPoolState(),
-                ref _currentSpecState.GetGraphicsState(),
-                addresses);
+            CachedShaderProgram gs;
+
+            if (_context.Nx2Ampere)
+            {
+                gs = Nx2GetGraphicsShader(shaderCache, samplerPoolMaximumId, addresses);
+            }
+            else
+            {
+                gs = shaderCache.GetGraphicsShader(
+                    ref _state.State,
+                    ref _pipeline,
+                    _channel,
+                    samplerPoolMaximumId,
+                    ref _currentSpecState.GetPoolState(),
+                    ref _currentSpecState.GetGraphicsState(),
+                    addresses);
+            }
 
             // Consume the modified flag for spec state so that it isn't checked again.
             _currentSpecState.SetShader(gs);

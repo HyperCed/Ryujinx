@@ -9,6 +9,7 @@ using Ryujinx.Graphics.Gpu.Engine.Twod;
 using Ryujinx.Graphics.Gpu.Image;
 using Ryujinx.Graphics.Gpu.Memory;
 using System;
+using System.Linq;
 using System.Runtime.CompilerServices;
 
 namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
@@ -360,7 +361,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
 
         private const int Nx2MaxParkedMethods = 16;
 
-        private static readonly bool _nx2ParkSplitMethods = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RYUJINX_NX2_PARK_SPLIT_METHODS"));
+        private static readonly bool _nx2ParkSplitMethods = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RYUJINX_NX2_PARK_SPLIT_METHODS")) && Environment.GetEnvironmentVariable("RYUJINX_NX2_PARK_SPLIT_METHODS") != "0";
 
         private readonly System.Collections.Generic.List<Nx2ParkedMethod> _nx2ParkedMethods = [];
         private ulong _nx2SplitMethodEnd; // End of the last entry that ended inside a method
@@ -414,9 +415,9 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             // after a macro's first word and supplies the remaining parameters in a subroutine entry.
             // RYUJINX_NX2_PARK_SPLIT_METHODS restores the older guess (an entry elsewhere is a call that
             // starts clean; the split method resumes where it ended).
-            if (start == 0 && _nx2ParkSplitMethods)
+            if (start == 0)
             {
-                Nx2ResolveSplitMethod(baseGpuVa);
+                Nx2ResolveSplitMethod(baseGpuVa, commandBuffer);
             }
 
             for (int index = start; index < commandBuffer.Length; index++)
@@ -464,6 +465,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
 
                 if (_fifoClass.Nx2PendingAcquire.HasValue)
                 {
+                    System.Threading.Interlocked.Increment(ref _nx2Suspensions);
+
                     return index + 1;
                 }
             }
@@ -471,6 +474,22 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             if (_state.MethodCount != 0)
             {
                 _nx2SplitMethodEnd = baseGpuVa + (ulong)commandBuffer.Length * 4;
+            }
+
+            if (Nx2Maxwell)
+            {
+                try
+                {
+                    GpuContext.Nx2Phase = "deferred draws";
+                    _3dClass.PerformDeferredDraws();
+                    GpuContext.Nx2Phase = "processing";
+                }
+                catch (Nx2DrawSkippedException)
+                {
+                    _nx2SkippedDraws++;
+                }
+
+                _3dClass.FlushUboDirty();
             }
 
             return commandBuffer.Length;
@@ -492,11 +511,12 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             _nx2ParkedMethods.Clear();
         }
 
-        // NVN on Switch 2 ends GPFIFO entries in the middle of a method's data and calls another command
-        // buffer (e.g. a compute dispatch) before the entry that carries the rest, which starts right where
-        // the first one ended. An entry starting anywhere else is such a call: run it with a clean method
-        // state and resume the unfinished method when the stream continues at that address.
-        private void Nx2ResolveSplitMethod(ulong entryAddress)
+        // NVN on Switch 2 ends GPFIFO entries in the middle of a method's data and supplies the rest in other
+        // entries (a macro's parameters in a 5-word entry, a 381-word upload in entries of 1 and 380 words),
+        // then continues at the address where the split entry ended: method state simply carries over.
+        // RYUJINX_NX2_PARK_SPLIT_METHODS=1 restores the older guess, where an entry elsewhere is a call that
+        // starts clean and the method resumes when the stream continues at its address.
+        private void Nx2ResolveSplitMethod(ulong entryAddress, ReadOnlySpan<int> commandBuffer)
         {
             Nx2ParkedMethod? resume = null;
 
@@ -510,7 +530,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 }
             }
 
-            if (_state.MethodCount != 0 && entryAddress != _nx2SplitMethodEnd)
+            if (_state.MethodCount != 0 && entryAddress != _nx2SplitMethodEnd &&
+                _nx2ParkSplitMethods)
             {
                 if (_nx2ParkedMethods.Count == Nx2MaxParkedMethods)
                 {
@@ -558,7 +579,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             }
 
             // Acquires: checked once, the GPU thread is never blocked on them.
-            uint word = MemoryManager.Read<uint>(address);
+            uint word = MemoryManager.Read<uint>(address, tracked: true);
             bool ready = operation switch
             {
                 0 => word == payload,
@@ -587,11 +608,113 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         /// </summary>
         /// <param name="subChannel">Subchannel index</param>
         /// <returns>The engine, or null if the subchannel has none</returns>
+        /// <summary>
+        /// RYUJINX_NX2_MAXWELL=1: Switch 2 3D methods also run on the Maxwell 3D engine, so its state
+        /// tracking and draws see them. Shaders are still SM86 code the Maxwell decoder can't read.
+        /// </summary>
+        internal static readonly bool Nx2Maxwell = Environment.GetEnvironmentVariable("RYUJINX_NX2_MAXWELL") == "1";
+
+        private Nx2Engine CreateNx2Threed()
+        {
+            Nx2Engine engine = new(_context, _channel, "3D", _nx2DataRam, _nx2Macros);
+
+            if (Nx2Maxwell)
+            {
+                engine.MethodWritten = ForwardToMaxwell3D;
+            }
+
+            return engine;
+        }
+
+        private void ForwardToMaxwell3D(uint method, uint value)
+        {
+            switch (method)
+            {
+                case >= 0x45 and <= 0x48:   // Macro upload: Turing code, kept by the Switch 2 engine
+                case >= 0x60 and <= 0x6d:   // Inline-to-memory: run by the Switch 2 engine
+                case >= 0x6c0 and <= 0x6c3: // Report semaphore: run by the Switch 2 engine
+                    return;
+            }
+
+            if (_nx2FailingMethods.Contains(method) || method < _nx2ForwardLow || method >= _nx2ForwardHigh || _nx2BlockedMethods.Contains(method))
+            {
+                return;
+            }
+
+            if (method is >= 0x8e4 and < 0x904)
+            {
+                // LOAD_CONSTANT_BUFFER into the buffer SET_CONSTANT_BUFFER_SELECTOR (0x8e0-0x8e2) names, at
+                // the offset in 0x8e3. NVN2 also patches memory other engines read right after (QMD release
+                // payloads) this way, so the word is written now, not batched like Maxwell's updates.
+                uint[] regs = _nx2Threed.Registers;
+                ulong address = ((ulong)regs[0x8e1] << 32 | regs[0x8e2]) + regs[0x8e3];
+
+                if (MemoryManager.IsMapped(address))
+                {
+                    MemoryManager.Write(address, value);
+                    GpuContext.Nx2WatchWrite(address, 4, () => $"constant buffer update 0x{value:x}");
+                }
+                else if (_nx2UnmappedUbo++ < 16)
+                {
+                    Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 constant buffer update at unmapped 0x{address:X} (size 0x{regs[0x8e0]:x}), dropped");
+                }
+
+                regs[0x8e3] += 4;
+                _3dClass.Write(0x8e3 * 4, (int)regs[0x8e3]);
+
+                return;
+            }
+
+            try
+            {
+                GpuContext.Nx2Phase = $"Maxwell 3D method 0x{method:x} = 0x{value:x}";
+                _3dClass.Write((int)method * 4, (int)value);
+                GpuContext.Nx2Phase = "processing";
+            }
+            catch (Nx2DrawSkippedException)
+            {
+                _nx2SkippedDraws++;
+            }
+            catch (Exception exception)
+            {
+                // A Maxwell method Ampere uses differently: drop it from now on.
+                _nx2FailingMethods.Add(method);
+
+                Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 3D method 0x{method:x} = 0x{value:x} failed on the Maxwell engine and is dropped from now on: {exception.GetType().Name}: {exception.Message}\n{exception.StackTrace}");
+            }
+        }
+
+        private static readonly System.Collections.Generic.HashSet<uint> _nx2FailingMethods = [];
+
+        // RYUJINX_NX2_MAXWELL_RANGE=<low hex>-<high hex>: forward only those methods (to bisect problems).
+        private static readonly uint _nx2ForwardLow = ParseForwardRange(0);
+
+        // RYUJINX_NX2_MAXWELL_BLOCK=<hex>,<hex>,...: methods never forwarded (to bisect problems).
+        private static readonly System.Collections.Generic.HashSet<uint> _nx2BlockedMethods =
+            [.. (Environment.GetEnvironmentVariable("RYUJINX_NX2_MAXWELL_BLOCK") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => Convert.ToUInt32(x, 16))];
+        private static readonly uint _nx2ForwardHigh = ParseForwardRange(1);
+
+        private static uint ParseForwardRange(int index)
+        {
+            string[] parts = Environment.GetEnvironmentVariable("RYUJINX_NX2_MAXWELL_RANGE")?.Split('-');
+
+            return parts is { Length: 2 } ? Convert.ToUInt32(parts[index], 16) : index == 0 ? 0u : 0xe00u;
+        }
+
+        private long _nx2SkippedDraws;
+        private long _nx2Suspensions;
+
+        /// <summary>
+        /// Switch 2: how many times the channel suspended on a semaphore acquire.
+        /// </summary>
+        public long Nx2Suspensions => System.Threading.Interlocked.Read(ref _nx2Suspensions);
+        private int _nx2UnmappedUbo;
+
         private Nx2Engine GetNx2Engine(int subChannel)
         {
             return subChannel switch
             {
-                0 => _nx2Threed ??= new Nx2Engine(_context, _channel, "3D", _nx2DataRam, _nx2Macros),
+                0 => _nx2Threed ??= CreateNx2Threed(),
                 1 => _nx2Compute ??= new Nx2Engine(_context, _channel, "compute", _nx2DataRam, _nx2Macros),
                 _ => null,
             };

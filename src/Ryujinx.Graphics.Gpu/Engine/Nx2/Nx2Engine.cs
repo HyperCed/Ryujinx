@@ -48,6 +48,10 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
         private readonly bool[] _seen = new bool[RegisterCount];
         private int _macroIndex = -1;
         private int _failures;
+        private static readonly bool _trace = Environment.GetEnvironmentVariable("RYUJINX_NX2_TRACE_CB") == "1";
+        private int _traced;
+        private int _macroDepth;
+        private uint _macroStart;
         private readonly System.Collections.Generic.HashSet<uint> _dumpedMacros = [];
         private bool _qmdDumped;
 
@@ -88,6 +92,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
             }
 
             Registers[method] = value;
+
+            if (_trace && method is >= 0x8e0 and <= 0x8e3 && _traced++ < 200000)
+            {
+                Logger.Info?.Print(LogClass.Gpu, $"Switch 2 {_name} cb selector 0x{method:x} = 0x{value:x} ({(_macroDepth != 0 ? $"macro start 0x{_macroStart:x}" : "method")})");
+            }
 
             if (method is >= InlineToMemoryStart and < InlineToMemoryEnd)
             {
@@ -170,7 +179,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                         return false;
                     }
 
-                    memory.GetSpan(address, descriptor.Length * sizeof(uint)).CopyTo(System.Runtime.InteropServices.MemoryMarshal.AsBytes(descriptor.AsSpan()));
+                    memory.GetSpan(address, descriptor.Length * sizeof(uint), tracked: true).CopyTo(System.Runtime.InteropServices.MemoryMarshal.AsBytes(descriptor.AsSpan()));
 
                     return true;
                 },
@@ -185,16 +194,17 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
 
                     if ((flags & (1u << 26)) != 0)
                     {
-                        payload = Nx2QmdScheduler.ReduceSemaphore((flags >> 20) & 7, ((flags >> 24) & 1) != 0, memory.Read<uint>(address), payload);
+                        payload = Nx2QmdScheduler.ReduceSemaphore((flags >> 20) & 7, ((flags >> 24) & 1) != 0, memory.Read<uint>(address, tracked: true), payload);
                     }
                     else if (!fourWords && (flags & (1u << 19)) != 0)
                     {
                         // NVN2 tracks QMD completion with a max release into a word other releases also
                         // advance: a plain write would move it backwards.
-                        payload = System.Math.Max(memory.Read<uint>(address), payload);
+                        payload = System.Math.Max(memory.Read<uint>(address, tracked: true), payload);
                     }
 
                     memory.Write(address, payload);
+                    GpuContext.Nx2WatchSemaphore(address, $"QMD 0x{qmdAddress:X} release 0x{payload:x} (flags 0x{flags:x})");
 
                     if (fourWords && (flags & (1u << 26)) == 0)
                     {
@@ -259,12 +269,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
             }
             else if (((control >> 3) & 1) != 0)
             {
-                uint current = memory.Read<uint>(address);
+                uint current = memory.Read<uint>(address, tracked: true);
 
                 payload = Nx2QmdScheduler.ReduceSemaphore((control >> 9) & 7, false, current, payload);
             }
 
             memory.Write(address, payload);
+            GpuContext.Nx2WatchSemaphore(address, $"{_name} report semaphore release 0x{payload:x} (control 0x{control:x})");
 
             if (!oneWord)
             {
@@ -308,7 +319,12 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
             Nx2MacroEngine macros = Macros;
             uint start = macros.Positions[index];
 
+            _macroDepth++;
+            _macroStart = start;
+
             TuringMacroInterpreter.Result result = macros.Interpreter.Execute(macros.Code, start, _parameters, _dataRam, Read, Emit);
+
+            _macroDepth--;
 
             if (!result.Success && _failures++ < 64)
             {
@@ -355,7 +371,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                 for (uint i = 0; i < count; i++)
                 {
                     ulong va = source + (ulong)i * 4;
-                    uint word = memory.IsMapped(va) ? memory.Read<uint>(va) : 0;
+                    uint word = memory.IsMapped(va) ? memory.Read<uint>(va, tracked: true) : 0;
 
                     if (address == DmaReadFifoed)
                     {

@@ -54,7 +54,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             // Switch 2: the last entry of a submission, and where to resume after a suspension.
             public bool EndOfSubmission;
 
+            // Switch 2: the channel's suspension count when the words were copied at submission.
+            public long SnapshotSuspensions;
+
             public int ResumeIndex;
+
+            // Switch 2: the raw entry, for its level (main or subroutine) and diagnostics.
+            public ulong RawEntry;
 
             /// <summary>
             /// Get the entries for the command buffer from memory.
@@ -179,7 +185,20 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
 
                 CommandBuffer commandBuffer = CreateCommandBuffer(processor, Unsafe.As<ulong, GPEntry>(ref entry));
 
+                commandBuffer.RawEntry = entry;
+
                 commandBuffer.EndOfSubmission = index == entries.Length - 1;
+
+                if (_context.Nx2Ampere && commandBuffer.Type == CommandBufferType.Prefetch && _nx2Snapshot &&
+                    processor.MemoryManager.IsMapped(commandBuffer.EntryAddress))
+                {
+                    // The game refills command memory it already submitted once the GPU thread falls behind:
+                    // keep the words as submitted. Entries the channel suspends before are read again then,
+                    // since the CPU writes the commands behind an acquire before it releases it.
+                    // RYUJINX_NX2_PB_SNAPSHOT=0 always reads them when they run.
+                    commandBuffer.SnapshotSuspensions = processor.Nx2Suspensions;
+                    commandBuffer.Prefetch(processor.MemoryManager);
+                }
 
                 // Switch 2 command buffers are gated by semaphores the CPU releases after writing them,
                 // so they are read when they run, never at submission.
@@ -268,10 +287,42 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         /// This can improve performance when command buffer data only needs to be consumed by the GPU.
         /// </remarks>
         /// <param name="count">The amount of flushes that should be skipped</param>
+        /// <summary>
+        /// Switch 2: describes the suspended channels and the queue, for diagnostics of stalls.
+        /// </summary>
+        public string Nx2Describe()
+        {
+            System.Text.StringBuilder text = new($"{_commandBufferQueue.Count} queued;");
+
+            foreach (GPFifoProcessor processor in _nx2DeferredOrder.ToArray())
+            {
+                Nx2PendingAcquire? acquire = processor.Nx2PendingAcquire;
+
+                text.Append($" channel {processor.GetHashCode():x}: {_nx2Deferred[processor].Count} deferred");
+
+                if (acquire is Nx2PendingAcquire a)
+                {
+                    text.Append($", waits 0x{a.Address:X} {a.Operation} 0x{a.Value:x} (now 0x{processor.MemoryManager.Read<uint>(a.Address):x}, {(System.Diagnostics.Stopwatch.GetTimestamp() - a.Since) * 1000 / System.Diagnostics.Stopwatch.Frequency} ms)");
+                }
+
+                text.Append(';');
+            }
+
+            text.Append($" last entries: {string.Join(" ", _nx2LastEntries.ToArray())}");
+
+            return text.ToString();
+        }
+
         // Switch 2: command buffers of channels that are suspended on a semaphore acquire, in order.
         private readonly System.Collections.Generic.Dictionary<GPFifoProcessor, System.Collections.Generic.Queue<CommandBuffer>> _nx2Deferred = [];
         private readonly System.Collections.Generic.List<GPFifoProcessor> _nx2DeferredOrder = [];
         private int _nx2Timeouts;
+        private readonly System.Collections.Generic.Queue<string> _nx2LastEntries = new();
+        private readonly System.Collections.Generic.HashSet<long> _nx2ReportedAcquires = [];
+
+        private static readonly bool _nx2GiveUpAcquires = Environment.GetEnvironmentVariable("RYUJINX_NX2_ACQUIRE_TIMEOUT") == "1";
+
+        private static readonly bool _nx2Snapshot = Environment.GetEnvironmentVariable("RYUJINX_NX2_PB_SNAPSHOT") != "0";
 
         private static readonly System.IO.BinaryWriter _nx2Dump = Environment.GetEnvironmentVariable("RYUJINX_NX2_GPFIFO_DUMP") is { Length: > 0 } path
             ? new System.IO.BinaryWriter(System.IO.File.Create(path))
@@ -299,15 +350,22 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                     System.Collections.Generic.Queue<CommandBuffer> queue = _nx2Deferred[processor];
 
                     if (processor.Nx2IsSuspended && processor.Nx2PendingAcquire is Nx2PendingAcquire acquire &&
-                        System.Diagnostics.Stopwatch.GetTimestamp() - acquire.Since > _nx2AcquireTimeout)
+                        System.Diagnostics.Stopwatch.GetTimestamp() - acquire.Since > _nx2AcquireTimeout &&
+                        _nx2ReportedAcquires.Add(acquire.Since))
                     {
+                        // Going on would run commands the CPU has not written yet: keep waiting, but say so.
+                        // RYUJINX_NX2_ACQUIRE_TIMEOUT=1 gives up on it instead.
                         if (_nx2Timeouts++ < 32)
                         {
                             Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
-                                $"Switch 2 channel waited 4 s on semaphore 0x{acquire.Address:X} ({acquire.Operation} 0x{acquire.Value:x}), continuing");
+                                $"Switch 2 channel {processor.GetHashCode():x} waits for 4 s on semaphore 0x{acquire.Address:X} ({acquire.Operation} 0x{acquire.Value:x}, now 0x{processor.MemoryManager.Read<uint>(acquire.Address):x}); " +
+                                $"{queue.Count} buffers deferred, {_commandBufferQueue.Count} queued, last entries: {string.Join(" ", _nx2LastEntries)}");
                         }
 
-                        processor.Nx2ForceResume();
+                        if (_nx2GiveUpAcquires)
+                        {
+                            processor.Nx2ForceResume();
+                        }
                     }
 
                     while (queue.Count != 0 && !processor.Nx2IsSuspended)
@@ -378,6 +436,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 return !processor.Nx2IsSuspended;
             }
 
+            if (entry.Words != null && entry.EntryAddress != ulong.MaxValue &&
+                (entry.ResumeIndex != 0 || entry.SnapshotSuspensions != processor.Nx2Suspensions))
+            {
+                // Suspended since the copy: the words may be new.
+                entry.Words = null;
+            }
+
             if (entry.Words != null)
             {
                 words = entry.Words;
@@ -405,13 +470,22 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 _nx2Dump.Write(processor.GetHashCode());
                 _nx2Dump.Write(entry.EntryAddress);
                 _nx2Dump.Write(entry.ResumeIndex);
-                _nx2Dump.Write(entry.EndOfSubmission ? 1 : 0);
+                _nx2Dump.Write((entry.EndOfSubmission ? 1 : 0) | (int)((entry.RawEntry >> 41) & 1) << 1 | (int)(entry.RawEntry & 3) << 2);
                 _nx2Dump.Write(words.Length);
                 _nx2Dump.Write(MemoryMarshal.AsBytes(words));
                 _nx2Dump.Flush();
             }
 
+            _nx2LastEntries.Enqueue($"{processor.GetHashCode():x}:{entry.EntryAddress:x}+{words.Length}@{entry.ResumeIndex}");
+
+            if (_nx2LastEntries.Count > 6)
+            {
+                _nx2LastEntries.Dequeue();
+            }
+
+            GpuContext.Nx2Phase = $"entry 0x{entry.EntryAddress:x}";
             entry.ResumeIndex = processor.Nx2Process(entry.EntryAddress, words, entry.ResumeIndex);
+            GpuContext.Nx2Phase = "dispatch";
 
             if (entry.ResumeIndex < words.Length || processor.Nx2IsSuspended)
             {

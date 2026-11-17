@@ -261,7 +261,7 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
         {
             uint[] w = Nx2Tipc.Words(context);
 
-            Logger.Debug?.Print(LogClass.ServiceNv, $"(STUBBED) nx2:gpu sparse region [{Nx2Tipc.Pair(w, 1):x}, {Nx2Tipc.Pair(w, 3):x}]");
+            Logger.Info?.Print(LogClass.ServiceNv, $"(STUBBED) nx2:gpu sparse region [{Nx2Tipc.Pair(w, 1):x}, {Nx2Tipc.Pair(w, 3):x}]");
             EventFor(context, w[9]).WritableEvent.Signal();
 
             return ResultCode.Success;

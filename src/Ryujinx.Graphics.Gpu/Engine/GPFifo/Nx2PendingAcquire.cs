@@ -28,7 +28,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 return true;
             }
 
-            uint current = memoryManager.Read<uint>(Address);
+            uint current = memoryManager.Read<uint>(Address, tracked: true);
 
             return Operation switch
             {

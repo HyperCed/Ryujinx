@@ -87,6 +87,35 @@ namespace Ryujinx.Graphics.Gpu
         /// <param name="address">GPU virtual address of the release</param>
         /// <param name="mirror">GPU virtual address of the mirror</param>
         /// <returns>True if the release has a mirror</returns>
+        private static readonly ulong _nx2SemaphoreWatch = ulong.TryParse(Environment.GetEnvironmentVariable("RYUJINX_NX2_SEM_WATCH"), System.Globalization.NumberStyles.HexNumber, null, out ulong watch) ? watch & ~0xfUL : 0;
+
+        /// <summary>
+        /// RYUJINX_NX2_SEM_WATCH=&lt;hex GPU address&gt;: logs every Switch 2 semaphore operation on the 16 bytes there.
+        /// </summary>
+        internal static void Nx2WatchSemaphore(ulong address, string operation)
+        {
+            if (_nx2SemaphoreWatch != 0 && (address & ~0xfUL) == _nx2SemaphoreWatch)
+            {
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Semaphore watch 0x{address:X}: {operation}");
+            }
+        }
+
+        /// <summary>
+        /// Logs a Switch 2 write of [address, address + size) that covers the watched address.
+        /// </summary>
+        internal static void Nx2WatchWrite(ulong address, ulong size, Func<string> writer)
+        {
+            if (_nx2SemaphoreWatch != 0 && _nx2SemaphoreWatch + 16 > address && _nx2SemaphoreWatch < address + size)
+            {
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Semaphore watch 0x{_nx2SemaphoreWatch:X}: written by {writer()} [0x{address:X}, +0x{size:x}]");
+            }
+        }
+
+        /// <summary>
+        /// What the GPU thread is doing on a Switch 2 channel, for diagnostics of stalls.
+        /// </summary>
+        public static volatile string Nx2Phase = "idle";
+
         internal bool Nx2TryGetSemaphoreMirror(ulong address, out ulong mirror)
         {
             mirror = address - 0x1000;
