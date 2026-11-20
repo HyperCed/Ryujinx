@@ -64,6 +64,50 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
             return ResultCode.Success;
         }
 
+        [CommandTipc(902)]  // OpenVideoDecoderSession (guessed)
+        [CommandTipc(905)]  // OpenVideoDecoderSessionWithFlag
+        [CommandTipc(906)]  // OpenVideoDecoderSessionWithVersion
+        [CommandTipc(1002)] // OpenVideoDecoderSession2 (guessed)
+        // The video decoder session (nn::codec::video). Left to the stub no handle came back and the movie
+        // player aborted with InvalidHandle (Lichii NX2_NOTES rows 105, 146).
+        public ResultCode OpenVideoSession(ServiceCtx context)
+        {
+            int command = (int)context.Request.Type - 0x10;
+
+            Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gsv {command}: returning a video decoder session");
+
+            return Nx2Tipc.ReturnSession(context, this, new INx2VideoSession(command == 1002 ? "nx2:vdec2" : "nx2:vdec"));
+        }
+
+        [CommandTipc(991)]
+        // CalculateDecoderImagePoolBuffer(preference[16 words], u32 count): result, u64 size, u64 alignment.
+        // The preference holds an output layout code at word 1 (1/4: NV12, what movie players use; 2/5
+        // BGRA; others RGBA) and (width - 1) | (height - 1) << 16 at word 2. Left to the stub, the reply
+        // kept the request's words: the size read as 0x167027f'00000001 and Mario Kart World's movie
+        // player aborted (main+0x19e5b58) when its first movie started, 1-4 min into the title screen
+        // (Lichii NX2_NOTES row 96). Pitch-linear rows, NV12's half-height chroma below the luma, each
+        // plane padded to 128 rows.
+        public ResultCode CalculateDecoderImagePoolBuffer(ServiceCtx context)
+        {
+            uint[] w = Nx2Tipc.Words(context);
+            uint code = w[1];
+            ulong width = (w[2] & 0xffff) + 1;
+            ulong height = (w[2] >> 16) + 1;
+            uint count = System.Math.Max(w[16], 1);
+            bool nv12 = code is 1 or 4;
+            const ulong BlockRows = 128;
+
+            ulong pitch = Ryujinx.Common.BitUtils.AlignUp(width * (nv12 ? 1UL : 4UL), 64UL);
+            ulong chromaOffset = pitch * Ryujinx.Common.BitUtils.AlignUp(height, BlockRows);
+            ulong size = (chromaOffset + (nv12 ? pitch * Ryujinx.Common.BitUtils.AlignUp((height + 1) / 2, BlockRows) : 0)) * count;
+            const ulong Alignment = 64 * 128;
+
+            Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gsv 991 decoder image pool code={code} {width}x{height} count={count} -> size=0x{size:x}");
+            Nx2Tipc.Reply64(context, size, Alignment);
+
+            return ResultCode.Success;
+        }
+
         [CommandTipc(201)]
         [CommandTipc(301)]
         [CommandTipc(401)]

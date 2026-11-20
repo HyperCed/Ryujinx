@@ -834,14 +834,15 @@ namespace Ryujinx.Graphics.Gpu
             }
         }
 
-        private static readonly bool _nx2ReleaseSync = Environment.GetEnvironmentVariable("RYUJINX_NX2_RELEASE_SYNC") != "0";
+        private static readonly bool _nx2ReleaseSync = Environment.GetEnvironmentVariable("RYUJINX_NX2_RELEASE_SYNC") == "1";
 
         /// <summary>
         /// Switch 2 fences are semaphore releases, not syncpoint increments: creates the host sync a syncpoint
         /// increment does, before the release becomes visible, so the guest CPU's reads of buffers the GPU
         /// wrote before it trap and flush (the read traps are armed when a sync is created). Without it the
-        /// game reads compute results back as stale memory (title sky lighting: 0/0 = NaN spherical harmonics).
-        /// RYUJINX_NX2_RELEASE_SYNC=0 turns it off.
+        /// game may read compute results back as stale memory. RYUJINX_NX2_RELEASE_SYNC=1 turns it on: off by
+        /// default, as Mario Kart World then crashed (null pointer in its main loop, Drive.nss 0x221518 ->
+        /// 0x2248f4) 25-60 s into the title screen.
         /// </summary>
         internal void Nx2SyncBeforeRelease(Image.TextureManager textureManager)
         {
