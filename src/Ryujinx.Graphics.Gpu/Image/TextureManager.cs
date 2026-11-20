@@ -70,6 +70,29 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <summary>
         /// Saves the render target RYUJINX_NX2_PASS_DUMP_RT names after a draw into it (Nx2PassDumper).
         /// </summary>
+        public string Nx2DescribeRenderTargets()
+        {
+            System.Text.StringBuilder text = new();
+
+            for (int index = 0; index < _rtColors.Length; index++)
+            {
+                if (_rtColors[index] is Texture texture)
+                {
+                    text.Append($" rt{index} {texture.Info.GpuAddress:x} {texture.Info.Width}x{texture.Info.Height} {texture.Format}{(texture.Info.Target != Target.Texture2D || texture.Info.GobBlocksInZ != 1 ? $" {texture.Info.Target} d{texture.Info.DepthOrLayers} gobZ{texture.Info.GobBlocksInZ} gobY{texture.Info.GobBlocksInY}" : "")}");
+                }
+            }
+
+            if (_rtDepthStencil is Texture depth)
+            {
+                text.Append($" ds {depth.Info.GpuAddress:x} {depth.Format}");
+            }
+
+            return text.ToString();
+        }
+
+        /// <summary>
+        /// Saves the render target RYUJINX_NX2_PASS_DUMP_RT names after a draw into it (Nx2PassDumper).
+        /// </summary>
         public void Nx2DumpRenderTargetAfterDraw(string program)
         {
             for (int index = 0; index < _rtColors.Length; index++)
@@ -77,6 +100,11 @@ namespace Ryujinx.Graphics.Gpu.Image
                 if (_rtColors[index] != null && Nx2PassDumper.IsTargetRenderTarget(_rtColors[index].Info.GpuAddress))
                 {
                     Nx2PassDumper.Dump(_rtColors[index], $"afterdraw_rt{index}", program);
+
+                    if (_rtColors[index].Group?.Storage is Texture storage && storage != _rtColors[index])
+                    {
+                        Nx2PassDumper.Dump(storage, $"afterdraw_storage{index}_z{_rtColors[index].FirstLayer}", program, _rtColors[index].FirstLayer);
+                    }
                 }
             }
         }

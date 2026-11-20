@@ -670,6 +670,14 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 {
                     GpuContext.Nx2Phase = "constant buffer update";
                     MemoryManager.Write(address, value);
+
+                    // As Maxwell's constant buffer updater does: buffers only look for CPU writes once per
+                    // sequence, so without this the next draws read the old word (each slice of a volume
+                    // drawn with the same slice index, objects drawn with another draw's transform).
+                    if (!_nx2NoCbDirty)
+                    {
+                        MemoryManager.Physical.BufferCache.ForceDirty(MemoryManager, address, 4);
+                    }
                     GpuContext.Nx2Phase = "processing";
                     GpuContext.Nx2WatchWrite(address, 4, () => $"constant buffer update 0x{value:x}");
                 }
@@ -729,6 +737,9 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         /// </summary>
         public long Nx2Suspensions => System.Threading.Interlocked.Read(ref _nx2Suspensions);
         private int _nx2UnmappedUbo;
+
+        // RYUJINX_NX2_NO_CB_DIRTY=1: constant buffer updates no longer mark the buffer dirty (to compare).
+        private static readonly bool _nx2NoCbDirty = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_CB_DIRTY") == "1";
 
         private Nx2Engine CreateNx2Compute()
         {

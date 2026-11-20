@@ -5,6 +5,7 @@ using Ryujinx.Graphics.Gpu.Image;
 using Ryujinx.Graphics.Gpu.Memory;
 using Ryujinx.Memory.Range;
 using System;
+using System.Collections.Generic;
 
 namespace Ryujinx.Graphics.Gpu.Engine.Threed
 {
@@ -616,7 +617,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         // uniform buffer word when it starts or stops being NaN (finds the frame where a value goes bad).
         private static readonly string[] _nx2CbWatch = Environment.GetEnvironmentVariable("RYUJINX_NX2_CB_WATCH")?.ToUpperInvariant().Split(':');
         private static readonly System.Diagnostics.Stopwatch _nx2CbWatchClock = System.Diagnostics.Stopwatch.StartNew();
-        public static bool Nx2WatchesUniforms => _nx2CbWatch != null;
+        public static bool Nx2WatchesUniforms => _nx2CbWatch != null || _nx2RenderTargetTrace;
+
+        // RYUJINX_NX2_RT_TRACE=1: logs each distinct (program, render targets) combination a draw uses.
+        private static readonly bool _nx2RenderTargetTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_RT_TRACE") == "1";
+        private static readonly HashSet<string> _nx2RenderTargetsSeen = [];
         private int _nx2CbWatchState = -1;
         private int _nx2CbWatchDraws;
 
@@ -748,11 +753,22 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 Nx2WatchUniformWord();
             }
 
+            if (_nx2RenderTargetTrace)
+            {
+                var rt0 = _state.State.RtColorState[0];
+                string key = $"[{GpuContext.Nx2LastProgram}]{_channel.TextureManager.Nx2DescribeRenderTargets()} | rt0 state {rt0.Address.Pack():x} w{rt0.WidthOrStride} h{rt0.Height} fmt {rt0.Format} layout 0x{rt0.MemoryLayout.Packed:x} depth {rt0.Depth} layerSize 0x{rt0.LayerSize:x} base {rt0.BaseLayer} ctl 0x{_state.State.RtControl.Packed:x}";
+
+                if (_nx2RenderTargetsSeen.Add(key) && _nx2RenderTargetsSeen.Count <= 5000)
+                {
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 draw targets: {count} x{instanceCount} {key}");
+                }
+            }
+
             if (Nx2PassDumper.Active)
             {
                 GpuContext.Nx2LastDrawProgram = GpuContext.Nx2LastProgram;
 
-                Nx2PassDumper.Note($"draw {count} x{instanceCount} indexed {indexed} mesh {_drawState.Nx2MeshDraw} [{GpuContext.Nx2LastProgram}]");
+                Nx2PassDumper.Note($"draw {count} x{instanceCount} indexed {indexed} mesh {_drawState.Nx2MeshDraw} [{GpuContext.Nx2LastProgram}]{_channel.TextureManager.Nx2DescribeRenderTargets()}");
 
                 if (Nx2PassDumper.IsTargetProgram(GpuContext.Nx2LastProgram))
                 {

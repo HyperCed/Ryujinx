@@ -136,7 +136,20 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <returns>A read only span of the data at the specified memory location</returns>
         private static int _nx2UnmappedReads;
 
-        public ReadOnlySpan<byte> GetSpan(MultiRange range, bool tracked = false)
+        /// <summary>
+        /// An ASTC void-extent block: constant colour (0, 0, 0, 0), valid for every block size. Zero bytes
+        /// are a reserved block mode that GPUs decode as the error colour, magenta.
+        /// </summary>
+        public static readonly byte[] AstcTransparentBlock = [0xfc, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        public ReadOnlySpan<byte> GetSpan(MultiRange range, bool tracked = false) => GetSpan(range, tracked, null);
+
+        /// <summary>
+        /// Gets the data of memory ranges, unmapped parts filled with a 16-byte pattern (zero without one).
+        /// Switch 2 virtual textures read their non-resident tiles that way: as ASTC zero blocks would be
+        /// magenta, they get void-extent blocks instead.
+        /// </summary>
+        public ReadOnlySpan<byte> GetSpan(MultiRange range, bool tracked, byte[] unmappedPattern)
         {
             if (range.Count == 1)
             {
@@ -157,7 +170,16 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 int size = (int)currentRange.Size;
 
                 // Switch 2 sparse textures: a GPU mapping can name CPU memory the process does not map.
-                if (currentRange.Address != MemoryManager.PteUnmapped && range.Count > 1 && !_cpuMemory.IsRangeMapped(currentRange.Address, (ulong)size))
+                if (unmappedPattern != null && (currentRange.Address == MemoryManager.PteUnmapped || !_cpuMemory.IsRangeMapped(currentRange.Address, (ulong)size)))
+                {
+                    Span<byte> fill = data.Slice(offset, size);
+
+                    for (int position = 0; position + unmappedPattern.Length <= fill.Length; position += unmappedPattern.Length)
+                    {
+                        unmappedPattern.CopyTo(fill[position..]);
+                    }
+                }
+                else if (currentRange.Address != MemoryManager.PteUnmapped && range.Count > 1 && !_cpuMemory.IsRangeMapped(currentRange.Address, (ulong)size))
                 {
                     if (_nx2UnmappedReads++ < 16)
                     {

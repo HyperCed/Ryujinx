@@ -450,7 +450,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                         int endOffset = Math.Min(spanLast + _sliceSizes[endInfo.BaseLevel + endInfo.Levels - 1], (int)Storage.Size);
                         int size = endOffset - spanBase;
 
-                        dataSpan = _physicalMemory.GetSpan(Storage.Range.Slice((ulong)spanBase, (ulong)size));
+                        dataSpan = _physicalMemory.GetSpan(Storage.Range.Slice((ulong)spanBase, (ulong)size), false, Storage.Info.FormatInfo.Format.IsAstc ? PhysicalMemory.AstcTransparentBlock : null);
                     }
 
                     // Only one of these will be greater than 1, as partial sync is only called when there are sub-image views.

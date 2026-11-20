@@ -283,6 +283,160 @@ namespace Ryujinx.Graphics.Gpu.Image
 
         private readonly HashSet<ulong> _nx2UnmappedTraced = [];
 
+        // Switch 2 titles render 3D textures slice by slice: each slice is a render target with the 3D
+        // layout, depth 1, at the volume's address plus the slice's offset inside a GOB block (z * 512 bytes
+        // for one GOB in Y), Mario Kart World's atmosphere (256x32x16 RGBA16F) and light (8x8x8, one slice per
+        // render target) volumes. Created on its own, such a texture lost the block's depth (the layout of a
+        // depth 1 texture shrinks it), its texels landed elsewhere and the sampled volume held garbage: the
+        // scene's colour cast. A slice is now a view of a volume of the block's depth.
+        // RYUJINX_NX2_NO_VOLUME_SLICES=1 turns it off.
+        private static readonly bool _nx2NoVolumeSlices = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_VOLUME_SLICES") == "1";
+        private static readonly int _nx2VolumeSlicesWidth = int.TryParse(Environment.GetEnvironmentVariable("RYUJINX_NX2_VOLUME_SLICES_WIDTH"), out int width) ? width : 0;
+        private readonly List<Texture> _nx2Volumes = [];
+        private readonly Dictionary<(Texture, int), Texture> _nx2VolumeSlices = [];
+        private int _nx2VolumeLogs;
+
+        private static TextureInfo Nx2VolumeInfo(ulong address, TextureInfo info, int depth) => new(
+            address,
+            info.Width,
+            info.Height,
+            depth,
+            1,
+            1,
+            1,
+            0,
+            false,
+            info.GobBlocksInY,
+            info.GobBlocksInZ,
+            1,
+            Target.Texture3D,
+            info.FormatInfo);
+
+        private static bool Nx2FindSlice(TextureInfo volumeInfo, TextureInfo info, out int z)
+        {
+            z = 0;
+
+            return info.GpuAddress >= volumeInfo.GpuAddress && info.GpuAddress - volumeInfo.GpuAddress < int.MaxValue &&
+                volumeInfo.Width == info.Width && volumeInfo.Height == info.Height &&
+                volumeInfo.FormatInfo.Format == info.FormatInfo.Format && volumeInfo.GobBlocksInY == info.GobBlocksInY &&
+                volumeInfo.GobBlocksInZ == info.GobBlocksInZ &&
+                volumeInfo.CalculateSizeInfo().FindView((int)(info.GpuAddress - volumeInfo.GpuAddress), out z, out int level) && level == 0 &&
+                z < volumeInfo.DepthOrLayers;
+        }
+
+        private Texture Nx2GetVolumeSlice(MemoryManager memoryManager, TextureInfo info, ulong volumeSize)
+        {
+            ulong address = info.GpuAddress;
+            Texture volume = null;
+            int z = 0;
+
+            // The volume the game samples, when it exists: its own depth (it may span several GOB blocks in Z).
+            ulong physical = memoryManager.Translate(address);
+
+            if (physical != MemoryManager.PteUnmapped)
+            {
+                Texture[] overlaps = new Texture[16];
+                int count;
+
+                _texturesLock.EnterReadLock();
+
+                try
+                {
+                    count = _textures.FindOverlaps(physical, ref overlaps);
+                }
+                finally
+                {
+                    _texturesLock.ExitReadLock();
+                }
+
+                for (int index = 0; index < count; index++)
+                {
+                    Texture candidate = overlaps[index];
+                    TextureInfo volumeInfo = candidate.Info;
+
+                    if (volumeInfo.Target == Target.Texture3D && volumeInfo.DepthOrLayers > 1 && candidate.HostTexture != null &&
+                        (volume == null || volumeInfo.DepthOrLayers > volume.Info.DepthOrLayers) &&
+                        Nx2FindSlice(volumeInfo, info, out int sliceIndex))
+                    {
+                        volume = candidate;
+                        z = sliceIndex;
+                    }
+                }
+            }
+
+            foreach (Texture candidate in volume != null ? [] : _nx2Volumes)
+            {
+                if (candidate.HostTexture != null && Nx2FindSlice(candidate.Info, info, out int sliceIndex))
+                {
+                    volume = candidate;
+                    z = sliceIndex;
+                    break;
+                }
+            }
+
+            if (volume == null)
+            {
+                // A new volume starts at this slice. Its depth: the one whose size is the render target's layer
+                // size (the whole volume's), else one GOB block.
+                int depth = info.GobBlocksInZ;
+
+                for (int candidateDepth = 2; candidateDepth <= 2048; candidateDepth++)
+                {
+                    if ((ulong)Nx2VolumeInfo(address, info, candidateDepth).CalculateSizeInfo().TotalSize == volumeSize)
+                    {
+                        depth = candidateDepth;
+                        break;
+                    }
+                }
+
+                TextureInfo volumeInfo = Nx2VolumeInfo(address, info, depth);
+
+                volume = FindOrCreateTexture(memoryManager, TextureSearchFlags.None, volumeInfo);
+
+                if (volume == null || volume.Info.Target != Target.Texture3D)
+                {
+                    return null;
+                }
+
+                volume.IncrementReferenceCount();
+                _nx2Volumes.Add(volume);
+
+                if (_nx2VolumeLogs < 500)
+                {
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 volume 0x{volume.Info.GpuAddress:X} created ({_nx2Volumes.Count} kept)");
+                }
+            }
+
+            if (!_nx2VolumeSlices.TryGetValue((volume, z), out Texture slice) || slice.HostTexture == null)
+            {
+                TextureInfo sliceInfo = new(
+                    address,
+                    info.Width,
+                    info.Height,
+                    1,
+                    1,
+                    1,
+                    1,
+                    0,
+                    false,
+                    info.GobBlocksInY,
+                    info.GobBlocksInZ,
+                    1,
+                    Target.Texture3D,
+                    info.FormatInfo);
+
+                slice = volume.CreateView(sliceInfo, sliceInfo.CalculateSizeInfo(), volume.Range, z, 0);
+                _nx2VolumeSlices[(volume, z)] = slice;
+
+                if (z == 0 ? _nx2VolumeLogs++ < 500 : _nx2VolumeLogs < 16)
+                {
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 volume slice {z} of 0x{volume.Info.GpuAddress:X} ({info.Width}x{info.Height}x{volume.Info.DepthOrLayers} {info.FormatInfo.Format}) rendered at 0x{address:X}");
+                }
+            }
+
+            return slice;
+        }
+
         // Switch 2 virtual textures still over TexturePool.Nx2SparseTextureMax once their largest levels are
         // dropped stay unbound.
         private static ulong _nx2SparseTextureMax => TexturePool.Nx2SparseTextureMax;
@@ -511,6 +665,19 @@ namespace Ryujinx.Graphics.Gpu.Image
             if (discard)
             {
                 flags |= TextureSearchFlags.DiscardData;
+            }
+
+            if (_context.Nx2Ampere && target == Target.Texture3D && colorState.Depth == 1 && gobBlocksInZ > 1 && !isLinear && !_nx2NoVolumeSlices &&
+                (_nx2VolumeSlicesWidth == 0 || _nx2VolumeSlicesWidth == colorState.WidthOrStride))
+            {
+                Texture slice = Nx2GetVolumeSlice(memoryManager, info, (ulong)colorState.LayerSize * 4);
+
+                if (slice != null)
+                {
+                    slice.SynchronizeMemory();
+
+                    return slice;
+                }
             }
 
             Texture texture = FindOrCreateTexture(memoryManager, flags, info, layerSize, sizeHint: sizeHint);

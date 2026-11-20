@@ -100,8 +100,12 @@ namespace Ryujinx.Graphics.Vulkan
             ImageAspectFlags aspectFlags = info.Format.ConvertAspectFlags(info.DepthStencilMode);
             ImageAspectFlags aspectFlagsDepth = info.Format.ConvertAspectFlags();
 
-            ImageSubresourceRange subresourceRange = new(aspectFlags, (uint)firstLevel, levels, (uint)firstLayer, layers);
-            ImageSubresourceRange subresourceRangeDepth = new(aspectFlagsDepth, (uint)firstLevel, levels, (uint)firstLayer, layers);
+            // A 3D image view always covers every slice; a view of some slices (rendering into one) selects
+            // them only in its 2D array view below.
+            uint viewFirstLayer = info.Target == Target.Texture3D ? 0u : (uint)firstLayer;
+
+            ImageSubresourceRange subresourceRange = new(aspectFlags, (uint)firstLevel, levels, viewFirstLayer, layers);
+            ImageSubresourceRange subresourceRangeDepth = new(aspectFlagsDepth, (uint)firstLevel, levels, viewFirstLayer, layers);
 
             unsafe Auto<DisposableImageView> CreateImageView(ComponentMapping cm, ImageSubresourceRange sr, ImageViewType viewType, ImageUsageFlags usageFlags)
             {

@@ -637,7 +637,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// </summary>
         public void SynchronizeFull()
         {
-            ReadOnlySpan<byte> data = _physicalMemory.GetSpan(Range);
+            ReadOnlySpan<byte> data = _physicalMemory.GetSpan(Range, false, Info.FormatInfo.Format.IsAstc ? PhysicalMemory.AstcTransparentBlock : null);
 
             // If the host does not support ASTC compression, we need to do the decompression.
             // The decompression is slow, so we want to avoid it as much as possible.

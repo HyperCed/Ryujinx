@@ -92,6 +92,10 @@ RYUJINX_NX2_MAXWELL=1 RYUJINX_NX2_COMPUTE=1 RYUJINX_GPU_HANG_ABORT=1 RYUJINX_GPU
 | `RYUJINX_NX2_ACQUIRE_TIMEOUT` | off | `1`: give up on a semaphore acquire that never completes instead of waiting. |
 | `RYUJINX_NX2_MAXWELL_RANGE=<lo>-<hi>`, `RYUJINX_NX2_MAXWELL_BLOCK=<m>,<m>` | all | Forward only some 3D methods (hex) to Maxwell, to bisect a problem. |
 | `RYUJINX_ZERO_FILL_ALL` | off | `1`: zero every new page, as before (to compare). |
+| `RYUJINX_NX2_NO_VOLUME_SLICES` | off | `1`: render targets that are one slice of a 3D texture are no longer drawn into that texture (to compare). `RYUJINX_NX2_VOLUME_SLICES_WIDTH=<w>` limits it to one width. |
+| `RYUJINX_NX2_NO_CB_DIRTY` | off | `1`: constant buffer updates no longer mark the buffer dirty (to compare; draws then read stale constants). |
+| `RYUJINX_NX2_VT_SKIP=<hex>` | none | Leave the virtual texture at that descriptor address unbound (to see what it does). |
+| `RYUJINX_NX2_VT_NO_SRGB` | off | `1`: sample the ASTC virtual textures as linear instead of sRGB (experiment). |
 
 ## 3. Debug
 
@@ -117,6 +121,7 @@ Inf counts per channel) in `passes.txt`.
 | `RYUJINX_NX2_PASS_DUMP_PROGRAM=<hex>` | For draws using that shader address: vertex input, indices, every constant buffer (`.bin` files), and the textures sampled. |
 | `RYUJINX_NX2_PASS_DUMP_RT=<hex>[-<hex>]` | Render target(s) at that GPU address (or range): saved after every draw into them. |
 | `RYUJINX_NX2_PASS_DUMP_NOPNG=1` | Statistics only (needed for per-draw dumps of large targets). |
+| `RYUJINX_NX2_PASS_DUMP_FRAMES=<n>` | Keep dumping for n presents (default 1). With `RYUJINX_NX2_PASS_DUMP_AT=1` and a target range, follows a render target over the whole run (passes drawn only at load time). |
 
 Typical session:
 
@@ -157,6 +162,7 @@ instruction, a scheduling word every 32 bytes).
 | `RYUJINX_NX2_BIGTEX_TRACE=1` | Logs textures of 2048x2048 or more read from the texture pool. |
 | `RYUJINX_NX2_SPARSE_TRACE=1` (+ `RYUJINX_NX2_SPARSE_TRACE_RANGE=<start>-<end>`) | Logs the sparse map requests (gpu 216), optionally only in an address range. |
 | `RYUJINX_NX2_VB_TRACE=1` | Logs vertex buffer bindings and sizes (first 400). |
+| `RYUJINX_NX2_RT_TRACE=1` | Logs each distinct combination of shader and render targets (address, size, format, 3D layout) over the run, and the 3D textures the shaders sample. |
 
 The 214 region creations are always logged (`nx2:gpu 214 … region`).
 

@@ -214,6 +214,11 @@ namespace Ryujinx.Graphics.Gpu.Image
                     TextureInfo info = Nx2GetInfo(descriptor, out int layerSize, out bool nx2Unsupported, out MultiRange? nx2Range, out object nx2Packing);
                     texture = nx2Unsupported ? null : Nx2FindOrCreateTexture(info, layerSize, nx2Range, nx2Packing);
 
+                    if (_nx2VolumeTrace && info.Target == Target.Texture3D && _nx2SparseLogged.TryAdd(info.GpuAddress | 3, 0))
+                    {
+                        Logger.Info?.Print(LogClass.Gpu, $"Switch 2 sampled volume 0x{info.GpuAddress:X}: {info.Width}x{info.Height}x{info.DepthOrLayers} levels {info.Levels} {info.FormatInfo.Format} gobY {info.GobBlocksInY} gobZ {info.GobBlocksInZ} -> texture 0x{texture?.Info.GpuAddress:X} {texture?.Info.Target} d{texture?.Info.DepthOrLayers}{(texture != null && texture.Info.GpuAddress != info.GpuAddress ? " (view)" : "")}");
+                    }
+
                     // If this happens, then the texture address is invalid, we can't add it to the cache.
                     if (texture == null)
                     {
@@ -556,6 +561,10 @@ namespace Ryujinx.Graphics.Gpu.Image
         internal static readonly ulong Nx2SparseTextureMax = (ulong.TryParse(Environment.GetEnvironmentVariable("RYUJINX_NX2_SPARSE_TEXTURE_MAX_MB"), out ulong mb) ? mb : 512) << 20;
 
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _nx2SparseLogged = new();
+        // RYUJINX_NX2_VT_SKIP=<hex descriptor address>: leave that virtual texture unbound (to see what it does).
+        private static readonly ulong _nx2VirtualSkip = Convert.ToUInt64(Environment.GetEnvironmentVariable("RYUJINX_NX2_VT_SKIP") ?? "0", 16);
+        private static readonly bool _nx2VirtualNoSrgb = Environment.GetEnvironmentVariable("RYUJINX_NX2_VT_NO_SRGB") == "1";
+        private static readonly bool _nx2VolumeTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_RT_TRACE") == "1";
 
         /// <summary>
         /// How a Switch 2 virtual texture's layers are gathered: the levels kept of each layer (Piece bytes) are
@@ -583,11 +592,24 @@ namespace Ryujinx.Graphics.Gpu.Image
                 return info;
             }
 
+            if (_nx2VirtualSkip == descriptor.UnpackAddress())
+            {
+                unsupported = true;
+
+                return info;
+            }
+
             int levels = descriptor.UnpackLevels();
 
             for (int skip = 1; (ulong)info.CalculateSizeInfo(0).TotalSize > Nx2SparseTextureMax && descriptor.UnpackBaseLevel() + skip <= descriptor.UnpackMaxLevelInclusive() && skip < levels; skip++)
             {
                 info = GetInfo(descriptor, out layerSize, skip);
+            }
+
+            if (_nx2VirtualNoSrgb && info.FormatInfo.Format == Format.Astc8x8Srgb &&
+                FormatTable.TryGetTextureFormat(descriptor.UnpackFormat(), false, out FormatInfo linear))
+            {
+                info = ChangeFormat(info, linear);
             }
 
             SizeInfo packedSize = info.CalculateSizeInfo(0);

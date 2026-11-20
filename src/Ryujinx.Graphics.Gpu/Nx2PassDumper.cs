@@ -26,6 +26,11 @@ namespace Ryujinx.Graphics.Gpu
         // 0 waiting, 1 dumping the frame, 2 done.
         private static int _state;
         private static int _passes;
+
+        // RYUJINX_NX2_PASS_DUMP_FRAMES=<n>: keep dumping for n presents (default 1). Presents come from
+        // another thread than the draws, so a slow per-draw dump needs several to reach a frame's end.
+        private static readonly int _frames = int.TryParse(Environment.GetEnvironmentVariable("RYUJINX_NX2_PASS_DUMP_FRAMES"), out int frames) ? frames : 1;
+        private static int _presentsDumped;
         private static StreamWriter _summary;
 
         public static bool Enabled => _directory != null;
@@ -91,6 +96,10 @@ namespace Ryujinx.Graphics.Gpu
                 _summary = new StreamWriter(Path.Combine(_directory, "passes.txt")) { AutoFlush = true };
                 Logger.Info?.Print(LogClass.Gpu, $"Switch 2 pass dump started into {_directory}");
             }
+            else if (Volatile.Read(ref _state) == 1 && Interlocked.Increment(ref _presentsDumped) < _frames)
+            {
+                _summary?.WriteLine($"---- present {_presentsDumped}");
+            }
             else if (Interlocked.CompareExchange(ref _state, 2, 1) == 1)
             {
                 Logger.Info?.Print(LogClass.Gpu, $"Switch 2 pass dump done: {_passes} passes");
@@ -100,9 +109,9 @@ namespace Ryujinx.Graphics.Gpu
         /// <summary>
         /// Saves a texture's level 0, layer 0 (on the GPU thread, while dumping).
         /// </summary>
-        public static void Dump(Image.Texture texture, string what, string program = null)
+        public static void Dump(Image.Texture texture, string what, string program = null, int layer = 0)
         {
-            if (!Active)
+            if (!Active || (TargetRenderTarget != 0 && !what.StartsWith("afterdraw")))
             {
                 return;
             }
@@ -122,7 +131,7 @@ namespace Ryujinx.Graphics.Gpu
                 int height = texture.Info.Height;
                 Format format = texture.Format;
 
-                using PinnedSpan<byte> data = texture.HostTexture.GetData(0, 0);
+                using PinnedSpan<byte> data = texture.HostTexture.GetData(layer, 0);
 
                 string name = $"{index:D4}_{what}_{texture.Info.GpuAddress:x}_{width}x{height}_{format}";
                 string stats = Convert(data.Get().ToArray(), width, height, format, texture.Info.FormatInfo.BytesPerPixel, out byte[] rgba);

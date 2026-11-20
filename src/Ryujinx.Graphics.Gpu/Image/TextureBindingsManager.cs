@@ -410,7 +410,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                 {
                     Texture texture = _textureState[bindingInfo.Binding].CachedTexture;
 
-                    Nx2PassDumper.Dump(texture, $"{what}_s{stageIndex}_b{bindingInfo.Binding}_h{bindingInfo.Handle:x}", texture == null ? "null" : $"{texture.Target} {texture.Info.DepthOrLayers} layers");
+                    Nx2PassDumper.Dump(texture, $"{what}_s{stageIndex}_b{bindingInfo.Binding}_h{bindingInfo.Handle:x}", texture == null ? "null" : $"{texture.Target} {texture.Info.DepthOrLayers} layers {texture.Info.FormatInfo.Format} swizzle {texture.Info.SwizzleR}{texture.Info.SwizzleG}{texture.Info.SwizzleB}{texture.Info.SwizzleA}");
                 }
             }
         }
