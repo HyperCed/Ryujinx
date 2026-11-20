@@ -21,6 +21,11 @@ namespace Ryujinx.Graphics.Shader.Translation
         /// </summary>
         public int Nx2PerPrimitiveInputs { get; set; }
 
+        /// <summary>
+        /// The program is a lowered Switch 2 program (surface accesses out of bounds are ignored there).
+        /// </summary>
+        public bool Nx2NativeProgram { get; set; }
+
         public int ComputeLocalSizeX { get; }
         public int ComputeLocalSizeY { get; }
         public int ComputeLocalSizeZ { get; }

@@ -98,7 +98,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     nameof(ThreedClassState.VertexBufferDrawState),
                     nameof(ThreedClassState.VertexBufferInstanced),
                     nameof(ThreedClassState.VertexBufferState),
-                    nameof(ThreedClassState.VertexBufferEndAddress)),
+                    nameof(ThreedClassState.VertexBufferEndAddress),
+                    nameof(ThreedClassState.Nx2VertexStreamSize)),
 
                 // Must be done after vertex buffer updates.
                 new StateUpdateCallbackEntry(UpdateVertexAttribState, nameof(ThreedClassState.VertexAttribState)),
@@ -390,7 +391,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     SbDescriptor sbDescriptor = _channel.MemoryManager.Physical.Read<SbDescriptor>(sbDescAddress);
 
                     uint size;
-                    if (sb.SbCbSlot == Constants.DriverReservedUniformBuffer)
+                    if (_context.Nx2Ampere)
+                    {
+                        size = GpuContext.Nx2StorageBufferSize(_channel.MemoryManager, sbDescriptor, compute: false, written: sb.Flags.HasFlag(BufferUsageFlags.Write));
+                    }
+                    else if (sb.SbCbSlot == Constants.DriverReservedUniformBuffer)
                     {
                         // Only trust the SbDescriptor size if it comes from slot 0.
                         size = (uint)sbDescriptor.Size;
@@ -1180,7 +1185,16 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
                 _drawState.IsAnyVbInstanced |= divisor != 0;
 
-                ulong vbSize = endAddress.Pack() - address + 1;
+                // Switch 2 sets a byte size (SET_VERTEX_STREAM_SIZE) instead of the end address.
+                ulong vbSize = _context.Nx2Ampere
+                    ? (((ulong)(_state.State.Nx2VertexStreamSize[index * 2] & 0xff) << 32) | _state.State.Nx2VertexStreamSize[index * 2 + 1]) + _nx2VertexBufferMargin
+                    : endAddress.Pack() - address + 1;
+
+                if (_nx2VertexBufferTrace && _nx2VertexBufferTraces < 400)
+                {
+                    _nx2VertexBufferTraces++;
+                    Logger.Info?.Print(LogClass.Gpu, $"Switch 2 vertex buffer {index}: address 0x{address:X} stride {stride} size A 0x{_state.State.Nx2VertexStreamSize[index * 2]:x} B 0x{_state.State.Nx2VertexStreamSize[index * 2 + 1]:x} end 0x{endAddress.Pack():X} indexed {drawIndexed} instanced {instanced}");
+                }
                 ulong size;
 
                 if (_drawState.IbStreamer.HasInlineIndexData || drawIndexed || stride == 0 || instanced)
@@ -1502,6 +1516,14 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// NVN's constant buffer for texture handles.
         /// </summary>
         internal const int Nx2TextureBufferIndex = 2;
+
+        private static readonly bool _nx2VertexBufferTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_VB_TRACE") == "1";
+        private static int _nx2VertexBufferTraces;
+
+        // Added to Switch 2 vertex buffer sizes: the console fetches 0 past the end of a vertex stream, Metal has
+        // no robust vertex fetch and faults when a draw reads past a small buffer (the title's draws do).
+        // RYUJINX_NX2_VB_MARGIN=<hex bytes> changes it.
+        private static readonly ulong _nx2VertexBufferMargin = Convert.ToUInt64(Environment.GetEnvironmentVariable("RYUJINX_NX2_VB_MARGIN") ?? "10000", 16);
 
         private static readonly bool _nx2NoMesh = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_MESH") == "1";
 

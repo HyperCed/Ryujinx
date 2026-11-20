@@ -280,7 +280,9 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                 // some this way without 215).
                 DestroyRegion(context, start);
 
-                if ((flags & SparseRegionFlag) == 0 && last > start && size % KPageTableBase.PageSize == 0 && size <= MaxBackedRegionSize)
+                bool backSparse = _backSparseRegions && size <= MaxBackedSparseRegionSize;
+
+                if (((flags & SparseRegionFlag) == 0 || backSparse) && last > start && size % KPageTableBase.PageSize == 0 && size <= MaxBackedRegionSize)
                 {
                     BackRegion(context, start, size);
                 }
@@ -296,6 +298,11 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
         }
 
         private const uint SparseRegionFlag = 0x200;
+
+        // RYUJINX_NX2_BACK_SPARSE=1: back sparse regions up to MaxBackedSparseRegionSize too, so textures
+        // there (render targets the game never maps memory under) can be created.
+        private static readonly bool _backSparseRegions = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_BACK_SPARSE") == "1";
+        private const ulong MaxBackedSparseRegionSize = 400UL << 20;
         private const ulong MaxBackedRegionSize = 512UL << 20;
 
         // System memory left to the services when backing GPU-only regions.
@@ -336,27 +343,55 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
             }
 
             ulong physicalAddress = pool.AllocatePagesContiguous(kernel, pages, backwards: true);
+            bool nonContiguous = physicalAddress == 0;
+            ulong cpuAddress;
+            Result result;
 
-            if (physicalAddress == 0)
+            if (physicalAddress != 0)
             {
-                Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 214 GPU-only region [{start:x}, +{size >> 20} MiB] not backed: no contiguous system memory");
+                result = pageTable.MapPages(
+                    pages,
+                    0x10000,
+                    physicalAddress,
+                    true,
+                    pageTable.TlsIoRegionStart,
+                    (pageTable.TlsIoRegionEnd - pageTable.TlsIoRegionStart) / KPageTableBase.PageSize,
+                    MemoryState.Io,
+                    KMemoryPermission.ReadAndWrite,
+                    out cpuAddress);
 
-                return;
+                // The mapping holds its own reference to the pages.
+                kernel.MemoryManager.DecrementPagesReferenceCount(physicalAddress, pages);
+
+                if (result == Result.Success)
+                {
+                    // The kernel hands out zeroed memory; pages the system pool gave out before (a region the
+                    // title destroyed and backs again) would keep their old contents. Pages never used are still zero.
+                    kernel.MemoryManager.ForEachDirtyRange(physicalAddress, pages,
+                        (pa, count) => process.CpuMemory.Fill(cpuAddress + (pa - physicalAddress), count * KPageTableBase.PageSize, 0));
+                }
             }
+            else
+            {
+                // The system pool is too fragmented for one run: the region only needs contiguous virtual memory.
+                result = pool.AllocatePages(out KPageList pageList, pages);
 
-            Result result = pageTable.MapPages(
-                pages,
-                0x10000,
-                physicalAddress,
-                true,
-                pageTable.TlsIoRegionStart,
-                (pageTable.TlsIoRegionEnd - pageTable.TlsIoRegionStart) / KPageTableBase.PageSize,
-                MemoryState.Io,
-                KMemoryPermission.ReadAndWrite,
-                out ulong cpuAddress);
+                if (result != Result.Success)
+                {
+                    Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 214 GPU-only region [{start:x}, +{size >> 20} MiB] not backed: {result}");
 
-            // The mapping holds its own reference to the pages.
-            kernel.MemoryManager.DecrementPagesReferenceCount(physicalAddress, pages);
+                    return;
+                }
+
+                result = pageTable.MapPageList(
+                    pageList,
+                    0x10000,
+                    pageTable.TlsIoRegionStart,
+                    (pageTable.TlsIoRegionEnd - pageTable.TlsIoRegionStart) / KPageTableBase.PageSize,
+                    MemoryState.Io,
+                    KMemoryPermission.ReadAndWrite,
+                    out cpuAddress);
+            }
 
             if (result != Result.Success)
             {
@@ -365,15 +400,10 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                 return;
             }
 
-            // The kernel hands out zeroed memory; pages the system pool gave out before (a region the title
-            // destroyed and backs again) would keep their old contents. Pages never used are still zero.
-            kernel.MemoryManager.ForEachDirtyRange(physicalAddress, pages,
-                (pa, count) => process.CpuMemory.Fill(cpuAddress + (pa - physicalAddress), count * KPageTableBase.PageSize, 0));
-
             _regions[start] = (cpuAddress, size);
             Nx2GpuMemoryRegistry.MapAt(start, cpuAddress, size);
 
-            Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 214 GPU-only region [{start:x}, +{size >> 20} MiB] backed at 0x{cpuAddress:x}");
+            Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 214 GPU-only region [{start:x}, +{size >> 20} MiB] backed{(nonContiguous ? " from non-contiguous pages" : "")} at 0x{cpuAddress:x}");
         }
 
         private void DestroyRegion(ServiceCtx context, ulong start)

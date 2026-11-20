@@ -274,6 +274,27 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
                 ? (int)_state.State.SetBindlessTextureConstantBufferSlotSelect
                 : Threed.StateUpdater.Nx2TextureBufferIndex;
 
+            // The texture handles come from the constant buffer the program's native texture instructions
+            // name (Lichii's texture_bound): for compute programs, the QMD's buffer 0, not the 3D bank 2.
+            if (!_nx2TextureBuffers.TryGetValue(shaderGpuVa, out uint requiredTextureBuffer))
+            {
+                try
+                {
+                    requiredTextureBuffer = Shader.Nx2.Nx2ShaderPrograms.Get(memoryManager, shaderGpuVa, -1).RequiredTextureBuffer;
+                }
+                catch (Shader.Nx2.Nx2ShaderException)
+                {
+                    requiredTextureBuffer = ~0U;
+                }
+
+                _nx2TextureBuffers[shaderGpuVa] = requiredTextureBuffer;
+            }
+
+            if (requiredTextureBuffer != ~0U)
+            {
+                nx2TextureBufferIndex = (int)requiredTextureBuffer;
+            }
+
             GpuChannelPoolState poolState = new(
                 texturePoolGpuVa,
                 _state.State.SetTexHeaderPoolCMaximumIndex,
@@ -316,7 +337,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
                 sbDescAddress += (ulong)sb.SbCbOffset * 4;
 
                 SbDescriptor sbDescriptor = _channel.MemoryManager.Physical.Read<SbDescriptor>(sbDescAddress);
-                uint size = (uint)_channel.MemoryManager.GetMappedSize(sbDescriptor.PackAddress(), Constants.MaxUnknownStorageSize);
+                uint size = GpuContext.Nx2StorageBufferSize(_channel.MemoryManager, sbDescriptor, compute: true, written: sb.Flags.HasFlag(BufferUsageFlags.Write));
 
                 GpuContext.Nx2TraceStorageBuffer("compute", sb.SbCbSlot, sb.SbCbOffset, _channel.MemoryManager, sbDescAddress, sbDescriptor.PackAddress(), sbDescriptor.Size, size);
 
@@ -337,5 +358,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
 
         private readonly HashSet<ulong> _nx2RejectedPrograms = [];
         private int _nx2OversizedDispatches;
+
+        private readonly Dictionary<ulong, uint> _nx2TextureBuffers = new();
     }
 }

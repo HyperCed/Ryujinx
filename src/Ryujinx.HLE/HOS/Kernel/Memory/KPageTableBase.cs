@@ -579,6 +579,55 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
             return Result.Success;
         }
 
+        /// <summary>
+        /// Maps physical pages that need not be contiguous at a free address of a region (zeroing the pages
+        /// used before). The mapping takes over the page list's references.
+        /// </summary>
+        public Result MapPageList(
+            KPageList pageList,
+            int alignment,
+            ulong regionStart,
+            ulong regionPagesCount,
+            MemoryState state,
+            KMemoryPermission permission,
+            out ulong address)
+        {
+            address = 0;
+
+            ulong pagesCount = pageList.GetPagesCount();
+
+            if (!CanContain(regionStart, regionPagesCount * PageSize, state))
+            {
+                return KernelResult.InvalidMemState;
+            }
+
+            lock (_blockManager)
+            {
+                address = AllocateVa(regionStart, regionPagesCount, pagesCount, alignment);
+
+                if (address == 0)
+                {
+                    return KernelResult.OutOfMemory;
+                }
+
+                if (!_slabManager.CanAllocate(MaxBlocksNeededForInsertion))
+                {
+                    return KernelResult.OutOfResource;
+                }
+
+                Result result = MapPages(address, pageList, permission, MemoryMapFlags.Private, true, 0);
+
+                if (result != Result.Success)
+                {
+                    return result;
+                }
+
+                _blockManager.InsertBlock(address, pagesCount, state, permission);
+            }
+
+            return Result.Success;
+        }
+
         public Result MapPages(ulong address, ulong pagesCount, MemoryState state, KMemoryPermission permission)
         {
             ulong size = pagesCount * PageSize;

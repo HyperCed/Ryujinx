@@ -825,7 +825,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         public fixed uint Reserved33C[16];
         public Boolean32 RasterizeEnable;
         public Array4<TfBufferState> TfBufferState;
-        public fixed uint Reserved400[192];
+        public fixed uint Reserved400[128];
+
+        /// <summary>
+        /// Switch 2 (Turing and later): SET_VERTEX_STREAM_SIZE_A/B (0x600 + 8 * index), the byte size of each
+        /// vertex buffer (A bits 7:0 high, B low 32 bits), replacing Maxwell's end addresses at 0x1f00.
+        /// </summary>
+        public Array64<uint> Nx2VertexStreamSize;
         public Array4<TfState> TfState;
         public fixed uint Reserved740[1];
         public Boolean32 TfEnable;

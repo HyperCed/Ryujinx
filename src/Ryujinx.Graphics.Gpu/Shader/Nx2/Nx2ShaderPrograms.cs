@@ -21,10 +21,17 @@ namespace Ryujinx.Graphics.Gpu.Shader.Nx2
         /// </summary>
         public readonly byte[] LoweredCode;
 
-        public Nx2ShaderProgram(byte[] nativeCode, byte[] loweredCode)
+        /// <summary>
+        /// Constant buffer the program's texture handles come from (its native texture instructions name
+        /// it), or ~0 when they name none: the engine's bindless texture slot then.
+        /// </summary>
+        public readonly uint RequiredTextureBuffer;
+
+        public Nx2ShaderProgram(byte[] nativeCode, byte[] loweredCode, uint requiredTextureBuffer = ~0U)
         {
             NativeCode = nativeCode;
             LoweredCode = loweredCode;
+            RequiredTextureBuffer = requiredTextureBuffer;
         }
     }
 
@@ -145,7 +152,7 @@ namespace Ryujinx.Graphics.Gpu.Shader.Nx2
 
             ReadOnlySpan<byte> header = headerSize == 0 ? ReadOnlySpan<byte>.Empty : nativeCode.AsSpan(0, Nx2LoweredCode.HeaderSize);
 
-            return new Nx2ShaderProgram(nativeCode, Nx2LoweredCode.Build(header, lowered));
+            return new Nx2ShaderProgram(nativeCode, Nx2LoweredCode.Build(header, lowered), lowered.RequiredTextureBuffer);
         }
     }
 }

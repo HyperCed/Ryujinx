@@ -64,6 +64,8 @@ namespace Ryujinx.Graphics.Shader.Translation
                 program = Decoder.Decode(definitions, gpuAccessor, address + HeaderSize);
             }
 
+            definitions.Nx2NativeProgram = gpuAccessor.QueryNx2NativeProgram();
+
             ulong maxEndAddress = 0;
 
             foreach (DecodedFunction function in program)

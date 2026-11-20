@@ -545,6 +545,10 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="descriptor">The texture descriptor</param>
         /// <param name="layerSize">Layer size for textures using a sub-range of mipmap levels, otherwise 0</param>
         /// <returns>The texture information</returns>
+        // RYUJINX_NX2_BIGTEX_TRACE=1: logs the large textures the game samples (once per address).
+        private static readonly bool _nx2BigTextureTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_BIGTEX_TRACE") == "1";
+        private static readonly ConcurrentDictionary<ulong, byte> _nx2BigTextures = new();
+
         private static TextureInfo GetInfo(in TextureDescriptor descriptor, out int layerSize)
         {
             int depthOrLayers = descriptor.UnpackDepth();
@@ -684,6 +688,11 @@ namespace Ryujinx.Graphics.Gpu.Image
                 {
                     swizzleA = SwizzleComponent.Red;
                 }
+            }
+
+            if (_nx2BigTextureTrace && (long)width * height * depthOrLayers >= 2048L * 2048 && _nx2BigTextures.TryAdd(gpuVa, 0))
+            {
+                Logger.Info?.Print(LogClass.Gpu, $"Switch 2 big texture 0x{gpuVa:X}: {target} {width}x{height}x{depthOrLayers} levels {levels} format {formatInfo.Format} (0x{format:x}) linear {isLinear}");
             }
 
             return new TextureInfo(

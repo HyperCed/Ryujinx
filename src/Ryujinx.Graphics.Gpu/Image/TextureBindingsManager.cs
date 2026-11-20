@@ -385,6 +385,10 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="cachedSamplerBuffer">The currently cached sampler buffer data</param>
         /// <param name="textureBufferIndex">The new texture buffer index</param>
         /// <param name="samplerBufferIndex">The new sampler buffer index</param>
+        // RYUJINX_NX2_TEXBIND_TRACE=1: logs Switch 2 texture bindings bound null or with another target.
+        private static readonly bool _nx2BindTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_TEXBIND_TRACE") == "1";
+        private static int _nx2BindTraces;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void UpdateCachedBuffer(
             int stageIndex,
@@ -521,6 +525,13 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                 ITexture hostTexture = texture?.GetTargetTexture(bindingInfo.Target);
                 ISampler hostSampler = sampler?.GetHostSampler(texture);
+
+                if (_nx2BindTrace && _context.Nx2Ampere && (hostTexture == null || texture.Target != bindingInfo.Target) &&
+                    System.Threading.Interlocked.Increment(ref _nx2BindTraces) <= 300)
+                {
+                    Logger.Info?.Print(LogClass.Gpu, $"Switch 2 texture binding {stage} b{bindingInfo.Binding} handle 0x{bindingInfo.Handle:x} cbuf {textureBufferIndex}: id {textureId} wants {bindingInfo.Target}, " +
+                        (texture == null ? $"no texture (descriptor address 0x{descriptor.UnpackAddress():X}, format 0x{descriptor.UnpackFormat():x})" : $"has {texture.Target} {texture.Info.Width}x{texture.Info.Height}x{texture.Info.DepthOrLayers} {texture.Format}{(hostTexture == null ? " -> NULL view" : "")}"));
+                }
 
                 if (GpuContext.Nx2PresentTrace && _context.Nx2Ampere && stage == ShaderStage.Fragment && _nx2TextureTraces < 80 &&
                     _nx2TracedTextures.Add((textureId, descriptor.UnpackAddress())))

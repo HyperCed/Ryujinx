@@ -350,6 +350,32 @@ namespace Ryujinx.Graphics.Gpu
             return Engine.Nx2.Nx2MirrorShadow.Read(address, guest) ?? guest;
         }
 
+        /// <summary>
+        /// Size of a Switch 2 storage buffer binding. A native pointer is bare: bound up to 8 MiB of its
+        /// mapping. A read-only compute binding grows to a plausible size word after the pointer: Mario Kart
+        /// World's lighting passes read past 8 MiB (capped, those reads came back empty and lit surfaces
+        /// stayed dark). Port of Lichii's StorageBufferBinding (#1231, #1333).
+        /// </summary>
+        internal static uint Nx2StorageBufferSize(Memory.MemoryManager memoryManager, in Engine.Types.SbDescriptor descriptor, bool compute, bool written)
+        {
+            const ulong BareLimit = 8UL << 20;
+            const ulong SizeWordLimit = (1UL << 30) - (64UL << 10);
+
+            ulong address = descriptor.PackAddress();
+            ulong mapped = memoryManager.GetMappedSize(address, SizeWordLimit);
+            ulong bare = Math.Min(mapped, BareLimit);
+
+            uint sizeWord = (uint)descriptor.Size;
+            bool isSizeWord = descriptor.Padding == 0 && sizeWord != 0 && sizeWord <= mapped;
+
+            if (compute && !written && isSizeWord && sizeWord > bare)
+            {
+                return (uint)Math.Min(sizeWord, SizeWordLimit);
+            }
+
+            return (uint)bare;
+        }
+
         internal bool Nx2TryGetSemaphoreMirror(ulong address, out ulong mirror)
         {
             mirror = address - 0x1000;

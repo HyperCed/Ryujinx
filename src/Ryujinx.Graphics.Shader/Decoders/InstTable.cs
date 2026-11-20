@@ -288,6 +288,9 @@ namespace Ryujinx.Graphics.Shader.Decoders
             Add("1110101100001xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", InstName.Suld,        InstEmit.Suld,        InstProps.Rd  | InstProps.Ra  | InstProps.SPd | InstProps.Tex);
             Add("1110101101010xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", InstName.SuredB,      InstEmit.SuredB,      InstProps.Rd  | InstProps.Ra  | InstProps.Rc);
             Add("1110101101011xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", InstName.Sured,       InstEmit.Sured,       InstProps.Rd  | InstProps.Ra);
+            // Bit 52 clear (as the Switch 2 lowering emits SURED): decoded like the forms with it set.
+            Add("1110101101001xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", InstName.Sured,       InstEmit.Sured,       InstProps.Rd  | InstProps.Ra);
+            Add("1110101101000xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", InstName.SuredB,      InstEmit.SuredB,      InstProps.Rd  | InstProps.Ra  | InstProps.Rc);
             Add("1110101100110xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", InstName.SustDB,      InstEmit.SustDB,      InstProps.Rd  | InstProps.Ra  | InstProps.Rc  | InstProps.TexB);
             Add("1110101100111xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", InstName.SustD,       InstEmit.SustD,       InstProps.Rd  | InstProps.Ra  | InstProps.Tex);
             Add("1110101100100xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", InstName.SustB,       InstEmit.SustB,       InstProps.Rd  | InstProps.Ra  | InstProps.Rc  | InstProps.TexB);
