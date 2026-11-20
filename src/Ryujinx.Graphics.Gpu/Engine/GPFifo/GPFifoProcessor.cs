@@ -287,6 +287,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                     // its QMDs and command lists through them. The 2D engine is not used.
                     if (offset < 0xe00)
                     {
+                        if (Nx2Maxwell && !_nx2NoEarlyDraws && subChannel is 2 or 3 or 4)
+                        {
+                            // Inline-to-memory, 2D and copies change memory a deferred instanced draw reads
+                            // (per-instance data): it runs first.
+                            _3dClass.Nx2FlushDeferredDraw();
+                        }
+
                         if (subChannel == 2)
                         {
                             _i2mClass.Write(offset * 4, argument);
@@ -656,8 +663,15 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         {
             switch (method)
             {
-                case >= 0x45 and <= 0x48:   // Macro upload: Turing code, kept by the Switch 2 engine
                 case >= 0x60 and <= 0x6d:   // Inline-to-memory: run by the Switch 2 engine
+                    // It writes memory right away: a deferred instanced draw must read the data before it.
+                    if (!_nx2NoEarlyDraws)
+                    {
+                        _3dClass.Nx2FlushDeferredDraw();
+                    }
+
+                    return;
+                case >= 0x45 and <= 0x48:   // Macro upload: Turing code, kept by the Switch 2 engine
                 case >= 0x6c0 and <= 0x6c3: // Report semaphore: run by the Switch 2 engine
                     return;
             }
@@ -674,6 +688,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 // payloads) this way, so the word is written now, not batched like Maxwell's updates.
                 uint[] regs = _nx2Threed.Registers;
                 ulong address = ((ulong)regs[0x8e1] << 32 | regs[0x8e2]) + regs[0x8e3];
+
+                if (!_nx2NoEarlyDraws)
+                {
+                    // A deferred instanced draw (trees, ...) reads the constants as they are now, not as the
+                    // next object's: it ran with another object's scale and position.
+                    _3dClass.Nx2FlushDeferredDraw();
+                }
 
                 if (MemoryManager.IsMapped(address))
                 {
@@ -750,6 +771,10 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         /// </summary>
         public long Nx2Suspensions => System.Threading.Interlocked.Read(ref _nx2Suspensions);
         private int _nx2UnmappedUbo;
+
+        // RYUJINX_NX2_NO_EARLY_DRAWS=1: deferred instanced draws no longer run before constant buffer updates and
+        // inline-to-memory writes (to compare).
+        private static readonly bool _nx2NoEarlyDraws = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_EARLY_DRAWS") == "1";
 
         // RYUJINX_NX2_NO_CB_DIRTY=1: constant buffer updates no longer mark the buffer dirty (to compare).
         private static readonly bool _nx2NoCbDirty = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_CB_DIRTY") == "1";

@@ -150,6 +150,18 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// would otherwise run with the next draw's state (vertex buffers, shaders, render targets). On Maxwell,
         /// the macro that issues the instances is followed by a flush; Switch 2 macros run elsewhere.
         /// </summary>
+        /// <summary>
+        /// Runs a deferred instanced draw before memory it reads changes (Switch 2 constant buffer updates and
+        /// inline-to-memory writes go to memory right away).
+        /// </summary>
+        internal void Nx2FlushDeferredDraw()
+        {
+            if (_drawManager.HasPendingInstancedDraw)
+            {
+                _drawManager.PerformDeferredDraws(this);
+            }
+        }
+
         internal void Nx2FlushDeferredDrawBeforeWrite(int offset, int value)
         {
             if (_drawManager.HasPendingInstancedDraw && !_nx2DrawRegisters.Contains(offset) && _state.Read(offset) != value)

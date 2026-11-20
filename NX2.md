@@ -100,6 +100,9 @@ RYUJINX_NX2_MAXWELL=1 RYUJINX_NX2_COMPUTE=1 RYUJINX_GPU_HANG_ABORT=1 RYUJINX_GPU
 | `RYUJINX_NX2_VT_NO_SRGB` | off | `1`: sample the ASTC virtual textures as linear instead of sRGB (experiment). |
 | `RYUJINX_NX2_NO_2D` | off | `1`: ignore the 2D engine (subchannel 3), as before. |
 | `RYUJINX_NX2_HOST_SPARSE_COPIES` | off | `1`: 2D blits into sparse regions stay host texture copies (the virtual textures then never see their tiles). |
+| `RYUJINX_NX2_HOST_LINEAR_COPIES` | off | `1`: 2D blits between linear surfaces stay host copies instead of going through guest memory. |
+| `RYUJINX_NX2_NO_EARLY_DRAWS` | off | `1`: a deferred instanced draw no longer runs before constant buffer updates, inline-to-memory, 2D and copy methods. |
+| `RYUJINX_NX2_NO_INSTANCE_SPLIT` | off | `1`: subsequent-instance draws are merged whatever they draw (different meshes or first instance), as on Maxwell. |
 
 ## 3. Debug
 

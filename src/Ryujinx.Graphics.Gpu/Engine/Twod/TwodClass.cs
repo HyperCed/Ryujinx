@@ -228,6 +228,10 @@ namespace Ryujinx.Graphics.Gpu.Engine.Twod
         /// </summary>
         /// <param name="argument">Method call argument</param>
         // RYUJINX_NX2_HOST_SPARSE_COPIES=1: blits into Switch 2 sparse regions stay host copies (to compare).
+        // Switch 2 blits between linear surfaces (64x64 RGBA32F tables the CPU reads back) are done in guest memory,
+        // where the CPU finds them. RYUJINX_NX2_HOST_LINEAR_COPIES=1 keeps them host copies.
+        private static readonly bool _nx2LinearGuestCopies = Environment.GetEnvironmentVariable("RYUJINX_NX2_HOST_LINEAR_COPIES") != "1";
+
         private static readonly bool _nx2HostSparseCopies = Environment.GetEnvironmentVariable("RYUJINX_NX2_HOST_SPARSE_COPIES") == "1";
 
         private void Nx2CpuCopy(TwodTexture src, ulong srcOffset, TwodTexture dst, int srcX, int srcY, int dstX, int dstY, int width, int height, int bpp)
@@ -350,7 +354,10 @@ namespace Ryujinx.Graphics.Gpu.Engine.Twod
             // are the same, as we can't blit between different depth formats.
             bool srcDepthAlias = srcCopyTexture.Format == dstCopyTexture.Format;
 
-            if (memoryManager.Physical.Nx2InSparseRegion(dstCopyTexture.Address.Pack()) && !_nx2HostSparseCopies &&
+            bool nx2GuestCopy = memoryManager.Physical.Nx2InSparseRegion(dstCopyTexture.Address.Pack()) ||
+                (_nx2LinearGuestCopies && GpuContext.Nx2RendersNative && dstCopyTexture.LinearLayout && srcCopyTexture.LinearLayout);
+
+            if (nx2GuestCopy && !_nx2HostSparseCopies &&
                 srcX2 - srcX1 == dstX2 - dstX1 && srcY2 - srcY1 == dstY2 - dstY1 &&
                 srcCopyTextureFormat.BytesPerPixel == dstCopyTextureFormat.BytesPerPixel)
             {

@@ -45,6 +45,12 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
         private int _instanceIndex;
 
+        // First instance of the pending draw (Switch 2 draws of other meshes that go on with the instance ID).
+        private int _nx2InstanceBase;
+
+        // RYUJINX_NX2_NO_INSTANCE_SPLIT=1: subsequent-instance draws are merged whatever they draw, as before.
+        private static readonly bool _nx2NoInstanceSplit = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_INSTANCE_SPLIT") == "1";
+
         private const int VertexBufferFirstMethodOffset = 0x35d;
         private const int IndexBufferCountMethodOffset = 0x5f8;
         // RYUJINX_NX2_DRAW_TRACE=1 logs non-trivial draws to large color targets.
@@ -141,6 +147,30 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 _channel.MemoryManager,
                 _state.State.RenderEnableAddress,
                 _state.State.RenderEnableCondition);
+
+            if (_instancedDrawPending && _context.Nx2Ampere && !_nx2NoInstanceSplit && renderEnable != ConditionalRenderEnabled.False)
+            {
+                // Switch 2 titles chain draws of other meshes as subsequent instances (the instance ID goes on):
+                // only one that draws the same vertices as the pending draw is one more instance of it. Another
+                // one (another index range: the wrong tree model, with another instance's transform) ends the
+                // pending draw, and starts from its own instance.
+                int ibCount = _drawState.IbStreamer.InlineIndexCount;
+                bool sameDraw = _drawState.DrawIndexed == _instancedIndexed &&
+                    (int)_state.State.FirstInstance == _instancedFirstInstance &&
+                    (_instancedIndexed
+                        ? firstIndex == _instancedFirstIndex && (ibCount != 0 ? ibCount : indexCount) == _instancedIndexCount && (int)_state.State.FirstVertex == _instancedFirstVertex
+                        : drawFirstVertex == _instancedDrawStateFirst && drawVertexCount == _instancedDrawStateCount);
+
+                if (!sameDraw && ibCount == 0 && !_instancedIndexedInline)
+                {
+                    int current = _instanceIndex;
+
+                    _instanceIndex = current - 1;
+                    PerformDeferredDraws(engine);
+                    _instanceIndex = current;
+                    _nx2InstanceBase = current;
+                }
+            }
 
             if (renderEnable == ConditionalRenderEnabled.False || _instancedDrawPending)
             {
@@ -303,6 +333,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 PerformDeferredDraws(engine);
 
                 _instanceIndex = 0;
+                _nx2InstanceBase = 0;
             }
 
             PrimitiveTopology topology;
@@ -944,8 +975,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             {
                 _instancedDrawPending = false;
 
-                int instanceCount = _instanceIndex + 1;
-                int firstInstance = _instancedFirstInstance;
+                int instanceCount = _instanceIndex + 1 - _nx2InstanceBase;
+                int firstInstance = _instancedFirstInstance + _nx2InstanceBase;
                 bool indexedInline = _instancedIndexedInline;
 
                 if (_instancedIndexed || indexedInline)
