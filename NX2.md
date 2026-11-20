@@ -82,7 +82,9 @@ RYUJINX_NX2_MAXWELL=1 RYUJINX_NX2_COMPUTE=1 RYUJINX_GPU_HANG_ABORT=1 RYUJINX_GPU
 
 | Variable | Default | Effect |
 |---|---|---|
-| `RYUJINX_NX2_SPARSE_TEXTURE_MAX_MB` | 512 | Largest host size of a virtual (sparse) texture; the largest mip levels are dropped to fit. |
+| `MVK_CONFIG_SPARSE_HEAP_SIZE_MB` | 1024 (set by `tools/nx2/run.sh`) | Size of the MoltenVK sparse heap the virtual textures take their blocks from. Metal commits it whole; the fork's own default (3072) runs a 16 GB Mac out of memory. |
+| `RYUJINX_NX2_NO_SPARSE_TEXTURES` | off | `1`: virtual textures are no longer sparse host textures, but ordinary ones without their largest mip levels (see below). |
+| `RYUJINX_NX2_SPARSE_TEXTURE_MAX_MB` | 512 | Without sparse textures: largest host size of a virtual texture; the largest mip levels are dropped to fit. |
 | `RYUJINX_NX2_VB_MARGIN` | 0x10000 | Extra bytes added to vertex buffers (Metal faults on reads past the end). |
 | `RYUJINX_NX2_RELEASE_SYNC` | off | `1`: each semaphore release creates the host sync that makes GPU-written buffers readable by the CPU (as a syncpoint does). Experimental: the title screen then crashes after 25-60 s. |
 | `RYUJINX_NX2_BACK_SPARSE` | on | `0`: sparse regions up to 512 MiB are left without backing memory. |

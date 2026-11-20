@@ -114,6 +114,13 @@ namespace Ryujinx.Graphics.Vulkan
                 flags |= ImageCreateFlags.Create2DArrayCompatibleBit;
             }
 
+            bool sparse = info.Nx2Sparse && foreignAllocation == null;
+
+            if (sparse)
+            {
+                flags |= ImageCreateFlags.CreateSparseBindingBit | ImageCreateFlags.CreateSparseResidencyBit;
+            }
+
             ImageCreateInfo imageCreateInfo = new()
             {
                 SType = StructureType.ImageCreateInfo,
@@ -132,7 +139,15 @@ namespace Ryujinx.Graphics.Vulkan
 
             gd.Api.CreateImage(device, in imageCreateInfo, null, out _image).ThrowOnError();
 
-            if (foreignAllocation == null)
+            if (sparse)
+            {
+                Nx2InitSparse(levels);
+
+                _imageAuto = new Auto<DisposableImage>(new DisposableImage(_gd.Api, device, _image));
+
+                InitialTransition(ImageLayout.Undefined, ImageLayout.General);
+            }
+            else if (foreignAllocation == null)
             {
                 gd.Api.GetImageMemoryRequirements(device, _image, out MemoryRequirements requirements);
                 MemoryAllocation allocation = gd.MemoryAllocator.AllocateDeviceMemory(requirements, DefaultImageMemoryFlags);
@@ -598,6 +613,210 @@ namespace Ryujinx.Graphics.Vulkan
             }
         }
 
+        // Switch 2 virtual textures (TextureCreateInfo.Nx2Sparse): a sparse image whose blocks get memory as
+        // data is uploaded to them, as Lichii's Image::BindTiles. Blocks never uploaded read as zero.
+        private Dictionary<(int Layer, int Level, int X, int Y), MemoryAllocation> _nx2Tiles;
+        private Dictionary<int, MemoryAllocation> _nx2Tails;
+        private SparseImageMemoryRequirements _nx2Sparse;
+        private MemoryRequirements _nx2Requirements;
+        private int _nx2TailLevel;
+
+        public bool IsNx2Sparse => _nx2Tiles != null;
+
+        public ulong Nx2BoundBytes { get; private set; }
+
+        private unsafe void Nx2InitSparse(uint levels)
+        {
+            uint count = 0;
+
+            _gd.Api.GetImageSparseMemoryRequirements(_device, _image, &count, null);
+
+            SparseImageMemoryRequirements[] requirements = new SparseImageMemoryRequirements[count];
+
+            fixed (SparseImageMemoryRequirements* pRequirements = requirements)
+            {
+                _gd.Api.GetImageSparseMemoryRequirements(_device, _image, &count, pRequirements);
+            }
+
+            bool found = false;
+
+            foreach (SparseImageMemoryRequirements requirement in requirements)
+            {
+                if (requirement.FormatProperties.AspectMask.HasFlag(ImageAspectFlags.ColorBit))
+                {
+                    _nx2Sparse = requirement;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
+            {
+                throw new Exception("Sparse image without color sparse requirements.");
+            }
+
+            _gd.Api.GetImageMemoryRequirements(_device, _image, out _nx2Requirements);
+
+            _nx2TailLevel = (int)Math.Min(_nx2Sparse.ImageMipTailFirstLod, levels);
+            _nx2Tiles = [];
+            _nx2Tails = [];
+
+            Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                $"Switch 2 sparse image {_info.Width}x{_info.Height}x{_info.GetLayers()} {_info.Format} levels {levels}: block " +
+                $"{_nx2Sparse.FormatProperties.ImageGranularity.Width}x{_nx2Sparse.FormatProperties.ImageGranularity.Height} " +
+                $"({_nx2Requirements.Alignment} bytes), mip tail from {_nx2TailLevel} ({_nx2Sparse.ImageMipTailSize} bytes)");
+        }
+
+        /// <summary>
+        /// Gives memory to the blocks of a sparse image that a region of one level and layer covers.
+        /// </summary>
+        public unsafe void Nx2BindSparse(int layer, int level, int x, int y, int width, int height)
+        {
+            if (_nx2Tiles == null)
+            {
+                return;
+            }
+
+            List<SparseImageMemoryBind> imageBinds = [];
+            List<SparseMemoryBind> opaqueBinds = [];
+            ulong tileSize = _nx2Requirements.Alignment;
+
+            MemoryAllocation Allocate(ulong size)
+            {
+                MemoryRequirements requirements = new()
+                {
+                    Size = size,
+                    Alignment = tileSize,
+                    MemoryTypeBits = _nx2Requirements.MemoryTypeBits,
+                };
+
+                MemoryAllocation allocation = _gd.MemoryAllocator.AllocateDeviceMemory(requirements, DefaultImageMemoryFlags);
+
+                if (allocation.Memory.Handle == 0UL)
+                {
+                    throw new Exception("Out of memory for a sparse image block.");
+                }
+
+                Nx2BoundBytes += size;
+
+                return allocation;
+            }
+
+            lock (_nx2Tiles)
+            {
+                if (level >= _nx2TailLevel)
+                {
+                    bool singleTail = _nx2Sparse.FormatProperties.Flags.HasFlag(SparseImageFormatFlags.SingleMiptailBit);
+                    int tailLayer = singleTail ? 0 : layer;
+
+                    if (_nx2Tails.ContainsKey(tailLayer) || _nx2Sparse.ImageMipTailSize == 0)
+                    {
+                        return;
+                    }
+
+                    ulong tailSize = BitUtils.AlignUp(_nx2Sparse.ImageMipTailSize, tileSize);
+                    MemoryAllocation tail = Allocate(tailSize);
+
+                    _nx2Tails[tailLayer] = tail;
+
+                    opaqueBinds.Add(new SparseMemoryBind
+                    {
+                        ResourceOffset = _nx2Sparse.ImageMipTailOffset + (ulong)tailLayer * _nx2Sparse.ImageMipTailStride,
+                        Size = _nx2Sparse.ImageMipTailSize,
+                        Memory = tail.Memory,
+                        MemoryOffset = tail.Offset,
+                    });
+                }
+                else
+                {
+                    int tileWidth = (int)_nx2Sparse.FormatProperties.ImageGranularity.Width;
+                    int tileHeight = (int)_nx2Sparse.FormatProperties.ImageGranularity.Height;
+                    int levelWidth = Math.Max(_info.Width >> level, 1);
+                    int levelHeight = Math.Max(_info.Height >> level, 1);
+
+                    for (int ty = y / tileHeight; ty <= (y + height - 1) / tileHeight; ty++)
+                    {
+                        for (int tx = x / tileWidth; tx <= (x + width - 1) / tileWidth; tx++)
+                        {
+                            if (_nx2Tiles.ContainsKey((layer, level, tx, ty)))
+                            {
+                                continue;
+                            }
+
+                            MemoryAllocation tile = Allocate(tileSize);
+
+                            _nx2Tiles[(layer, level, tx, ty)] = tile;
+
+                            int tileX = tx * tileWidth;
+                            int tileY = ty * tileHeight;
+
+                            imageBinds.Add(new SparseImageMemoryBind
+                            {
+                                Subresource = new ImageSubresource(ImageAspectFlags.ColorBit, (uint)level, (uint)layer),
+                                Offset = new Offset3D(tileX, tileY, 0),
+                                Extent = new Extent3D((uint)Math.Min(tileWidth, levelWidth - tileX), (uint)Math.Min(tileHeight, levelHeight - tileY), 1),
+                                Memory = tile.Memory,
+                                MemoryOffset = tile.Offset,
+                            });
+                        }
+                    }
+                }
+
+                if (imageBinds.Count == 0 && opaqueBinds.Count == 0)
+                {
+                    return;
+                }
+
+                SparseImageMemoryBind[] imageBindArray = imageBinds.ToArray();
+                SparseMemoryBind[] opaqueBindArray = opaqueBinds.ToArray();
+
+                fixed (SparseImageMemoryBind* pImageBinds = imageBindArray)
+                fixed (SparseMemoryBind* pOpaqueBinds = opaqueBindArray)
+                {
+                    SparseImageMemoryBindInfo imageBindInfo = new()
+                    {
+                        Image = _image,
+                        BindCount = (uint)imageBindArray.Length,
+                        PBinds = pImageBinds,
+                    };
+
+                    SparseImageOpaqueMemoryBindInfo opaqueBindInfo = new()
+                    {
+                        Image = _image,
+                        BindCount = (uint)opaqueBindArray.Length,
+                        PBinds = pOpaqueBinds,
+                    };
+
+                    BindSparseInfo bindInfo = new()
+                    {
+                        SType = StructureType.BindSparseInfo,
+                        ImageBindCount = imageBindArray.Length != 0 ? 1u : 0u,
+                        PImageBinds = imageBindArray.Length != 0 ? &imageBindInfo : null,
+                        ImageOpaqueBindCount = opaqueBindArray.Length != 0 ? 1u : 0u,
+                        PImageOpaqueBinds = opaqueBindArray.Length != 0 ? &opaqueBindInfo : null,
+                    };
+
+                    FenceCreateInfo fenceInfo = new() { SType = StructureType.FenceCreateInfo };
+
+                    _gd.Api.CreateFence(_device, in fenceInfo, null, out Fence fence).ThrowOnError();
+
+                    try
+                    {
+                        lock (_gd.QueueLock)
+                        {
+                            _gd.Api.QueueBindSparse(_gd.Queue, 1, in bindInfo, fence).ThrowOnError();
+                        }
+
+                        _gd.Api.WaitForFences(_device, 1, in fence, true, ulong.MaxValue).ThrowOnError();
+                    }
+                    finally
+                    {
+                        _gd.Api.DestroyFence(_device, fence, null);
+                    }
+                }
+            }
+        }
+
         public void Dispose()
         {
             Disposed = true;
@@ -614,6 +833,25 @@ namespace Ryujinx.Graphics.Vulkan
 
             _imageAuto.Dispose();
             _allocationAuto?.Dispose();
+
+            if (_nx2Tiles != null)
+            {
+                lock (_nx2Tiles)
+                {
+                    foreach (MemoryAllocation tile in _nx2Tiles.Values)
+                    {
+                        tile.Dispose();
+                    }
+
+                    foreach (MemoryAllocation tail in _nx2Tails.Values)
+                    {
+                        tail.Dispose();
+                    }
+
+                    _nx2Tiles.Clear();
+                    _nx2Tails.Clear();
+                }
+            }
             _foreignAllocationAuto?.DecrementReferenceCount();
             _foreignAllocationAuto = null;
         }

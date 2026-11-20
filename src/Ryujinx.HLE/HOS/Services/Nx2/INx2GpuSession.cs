@@ -512,6 +512,12 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                 SparseMapRequest request = requests[i];
                 kinds[i] = request.Kind;
                 ApplySparseMapRequest(request);
+
+                if (request.MemoryHandle != 0 && request.Size != 0)
+                {
+                    // Virtual textures upload the tiles mapped there.
+                    context.Device.Gpu.Nx2SparseMapped(request.GpuAddress, request.Size);
+                }
             }
 
             if (context.Request.ReceiveBuff.Count > 0 && kinds.Length > 0)

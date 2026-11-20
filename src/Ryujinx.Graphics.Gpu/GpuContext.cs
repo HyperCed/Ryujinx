@@ -120,6 +120,16 @@ namespace Ryujinx.Graphics.Gpu
         private readonly Dictionary<ulong, ulong> _nx2SparseRegions = new();
 
         /// <summary>
+        /// Switch 2 virtual textures (sparse host textures of the unbacked sparse regions).
+        /// </summary>
+        internal Image.Nx2VirtualTextures Nx2VirtualTextures { get; }
+
+        /// <summary>
+        /// The game mapped memory into a sparse region (gpu 216): the virtual textures there upload it.
+        /// </summary>
+        public void Nx2SparseMapped(ulong address, ulong size) => Nx2VirtualTextures.Mapped(address, size);
+
+        /// <summary>
         /// Registers an unbacked Switch 2 sparse region (gpu 214): virtual textures there have only the tiles
         /// the game maps (216), and their first page may well be unmapped.
         /// </summary>
@@ -567,6 +577,8 @@ namespace Ryujinx.Graphics.Gpu
             Synchronization = new SynchronizationManager();
 
             Window = new Window(this);
+
+            Nx2VirtualTextures = new Image.Nx2VirtualTextures(this);
 
             HostInitalized = new ManualResetEvent(false);
             _gpuReadyEvent = new ManualResetEvent(false);

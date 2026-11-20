@@ -10,6 +10,9 @@ MIN_FREE_PCT=${MIN_FREE_PCT:-12}
 
 if pgrep -x Ryujinx >/dev/null; then echo "Ryujinx is already running"; exit 1; fi
 
+# The mesh/sparse MoltenVK commits its sparse heap whole (3 GB by default): the virtual textures need ~0.7 GB.
+export MVK_CONFIG_SPARSE_HEAP_SIZE_MB=${MVK_CONFIG_SPARSE_HEAP_SIZE_MB:-1024}
+
 RYUJINX_GPU_HANG_ABORT=1 RYUJINX_GPU_WATCHDOG_MS=1500 caffeinate -dims \
   $ROOT/src/Ryujinx/bin/Release/net10.0/Ryujinx --no-gui --disable-file-logging --disable-ptc --disable-shader-cache \
   --dram-size ${DRAM:-MemoryConfiguration32GiB} "$@" "$EXEFS" > $LOG 2>&1 &

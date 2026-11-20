@@ -432,6 +432,8 @@ namespace Ryujinx.Graphics.Vulkan
                 VertexPipelineStoresAndAtomics = supportedFeatures.VertexPipelineStoresAndAtomics,
                 RobustBufferAccess = useRobustBufferAccess,
                 SampleRateShading = supportedFeatures.SampleRateShading,
+                SparseBinding = supportedFeatures.SparseBinding,
+                SparseResidencyImage2D = supportedFeatures.SparseResidencyImage2D,
             };
 
             void* pExtendedFeatures = null;

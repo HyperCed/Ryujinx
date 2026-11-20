@@ -590,8 +590,29 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// Be aware that this can cause texture data written by the GPU to be lost, this is just a
         /// one way copy (from CPU owned to GPU owned memory).
         /// </summary>
+        /// <summary>
+        /// A Switch 2 virtual texture (<see cref="Nx2VirtualTextures"/>): a sparse host texture outside the
+        /// texture cache, whose data is uploaded as the game maps it.
+        /// </summary>
+        public bool Nx2Sparse { get; private set; }
+
+        public void Nx2SetSparseHost(ITexture host)
+        {
+            HostTexture = host;
+            Nx2Sparse = true;
+            _hasData = true;
+            _dirty = false;
+        }
+
         public void SynchronizeMemory()
         {
+            if (Nx2Sparse)
+            {
+                _context.Nx2VirtualTextures.Refresh(this);
+
+                return;
+            }
+
             if (Target == Target.TextureBuffer)
             {
                 return;
@@ -1755,7 +1776,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         {
             ChangedMapping = true;
 
-            if (Group.Storage == this)
+            if (Group?.Storage == this)
             {
                 Group.Unmapped();
                 Group.ClearModified(unmapRange);
@@ -1769,7 +1790,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         {
             DisposeTextures();
 
-            if (Group.Storage == this)
+            if (Group?.Storage == this)
             {
                 Group.Dispose();
             }

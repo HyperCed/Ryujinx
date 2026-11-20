@@ -16,6 +16,12 @@ namespace Ryujinx.Graphics.GAL
 
         public bool IsCompressed => (BlockWidth | BlockHeight) != 1;
 
+        /// <summary>
+        /// Switch 2 virtual texture: created sparse, without memory. Memory is bound to the blocks data is
+        /// uploaded to (SetData with a region), the other blocks read as zero.
+        /// </summary>
+        public bool Nx2Sparse { get; init; }
+
         public Format Format { get; }
 
         public DepthStencilMode DepthStencilMode { get; }
@@ -125,6 +131,7 @@ namespace Ryujinx.Graphics.GAL
         public bool Equals(TextureCreateInfo other)
         {
             return Width == other.Width &&
+                   Nx2Sparse == other.Nx2Sparse &&
                    Height == other.Height &&
                    Depth == other.Depth &&
                    Levels == other.Levels &&

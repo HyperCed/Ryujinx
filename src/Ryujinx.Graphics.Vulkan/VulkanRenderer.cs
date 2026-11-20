@@ -831,7 +831,11 @@ namespace Ryujinx.Graphics.Vulkan
                 storageBufferOffsetAlignment: (int)limits.MinStorageBufferOffsetAlignment,
                 textureBufferOffsetAlignment: (int)limits.MinTexelBufferOffsetAlignment,
                 gatherBiasPrecision: IsIntelWindows || IsAmdWindows ? (int)Capabilities.SubTexelPrecisionBits : 0,
-                maximumGpuMemory: GetTotalGPUMemory());
+                maximumGpuMemory: GetTotalGPUMemory())
+            {
+                SupportsNx2SparseTextures = features2.Features.SparseBinding && features2.Features.SparseResidencyImage2D &&
+                    mainQueueProperties.QueueFlags.HasFlag(QueueFlags.SparseBindingBit),
+            };
         }
 
         private ulong GetTotalGPUMemory()

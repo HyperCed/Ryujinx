@@ -211,8 +211,19 @@ namespace Ryujinx.Graphics.Gpu.Image
                         return ref descriptor;
                     }
 
-                    TextureInfo info = Nx2GetInfo(descriptor, out int layerSize, out bool nx2Unsupported, out MultiRange? nx2Range, out object nx2Packing);
-                    texture = nx2Unsupported ? null : Nx2FindOrCreateTexture(info, layerSize, nx2Range, nx2Packing);
+                    TextureInfo info;
+
+                    if (Context.Nx2Ampere && Context.Nx2VirtualTextures.Handles(descriptor.UnpackAddress()) && Nx2VirtualSkip != descriptor.UnpackAddress())
+                    {
+                        // A virtual texture: a sparse host texture of its full size (Nx2VirtualTextures).
+                        info = GetInfo(descriptor, out int stride);
+                        texture = Context.Nx2VirtualTextures.GetOrCreate(_channel.MemoryManager, PhysicalMemory, info, stride);
+                    }
+                    else
+                    {
+                        info = Nx2GetInfo(descriptor, out int layerSize, out bool nx2Unsupported, out MultiRange? nx2Range, out object nx2Packing);
+                        texture = nx2Unsupported ? null : Nx2FindOrCreateTexture(info, layerSize, nx2Range, nx2Packing);
+                    }
 
                     if (_nx2VolumeTrace && info.Target == Target.Texture3D && _nx2SparseLogged.TryAdd(info.GpuAddress | 3, 0))
                     {
@@ -336,7 +347,7 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             ref readonly TextureDescriptor descriptor = ref GetInternal(id, out texture);
 
-            if (texture != null && formatInfo.Format != 0 && texture.Format != formatInfo.Format)
+            if (texture != null && formatInfo.Format != 0 && texture.Format != formatInfo.Format && !texture.Nx2Sparse)
             {
                 if (!_aliasLists.TryGetValue(texture, out TextureAliasList aliasList))
                 {
@@ -562,6 +573,7 @@ namespace Ryujinx.Graphics.Gpu.Image
 
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _nx2SparseLogged = new();
         // RYUJINX_NX2_VT_SKIP=<hex descriptor address>: leave that virtual texture unbound (to see what it does).
+        private static ulong Nx2VirtualSkip => _nx2VirtualSkip;
         private static readonly ulong _nx2VirtualSkip = Convert.ToUInt64(Environment.GetEnvironmentVariable("RYUJINX_NX2_VT_SKIP") ?? "0", 16);
         private static readonly bool _nx2VirtualNoSrgb = Environment.GetEnvironmentVariable("RYUJINX_NX2_VT_NO_SRGB") == "1";
         private static readonly bool _nx2VolumeTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_RT_TRACE") == "1";

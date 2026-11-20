@@ -4,6 +4,11 @@ namespace Ryujinx.Graphics.GAL
 {
     public readonly struct Capabilities
     {
+        /// <summary>
+        /// Textures can be created sparse (TextureCreateInfo.Nx2Sparse): Switch 2 virtual textures.
+        /// </summary>
+        public bool SupportsNx2SparseTextures { get; init; }
+
         public readonly TargetApi Api;
         public readonly string VendorName;
         public readonly SystemMemoryType MemoryType;

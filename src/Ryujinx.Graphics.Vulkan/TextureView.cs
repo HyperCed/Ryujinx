@@ -781,6 +781,11 @@ namespace Ryujinx.Graphics.Vulkan
         /// <inheritdoc/>
         public void SetData(MemoryOwner<byte> data, int layer, int level, Rectangle<int> region)
         {
+            if (Storage.IsNx2Sparse)
+            {
+                Storage.Nx2BindSparse(FirstLayer + layer, FirstLevel + level, region.X, region.Y, region.Width, region.Height);
+            }
+
             SetData(data.Span, layer, level, 1, 1, singleSlice: true, region);
             data.Dispose();
         }
