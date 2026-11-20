@@ -281,6 +281,26 @@ namespace Ryujinx.Graphics.Gpu.Image
             return true;
         }
 
+        private readonly HashSet<ulong> _nx2UnmappedTraced = [];
+
+        // Switch 2 virtual textures still over TexturePool.Nx2SparseTextureMax once their largest levels are
+        // dropped stay unbound.
+        private static ulong _nx2SparseTextureMax => TexturePool.Nx2SparseTextureMax;
+        private readonly HashSet<ulong> _nx2SparseTraced = [];
+
+        private bool Nx2TooLargeSparseTexture(TextureInfo info, int layerSize)
+        {
+            ulong size = (ulong)info.CalculateSizeInfo(0).TotalSize;
+            bool tooLarge = size > _nx2SparseTextureMax;
+
+            if (_nx2SparseTraced.Add(info.GpuAddress))
+            {
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 virtual texture at 0x{info.GpuAddress:X}: {info.Target} {info.Width}x{info.Height}x{info.DepthOrLayers} levels {info.Levels} {info.FormatInfo.Format}, {size >> 20} MiB{(tooLarge ? ", too large: left unbound" : "")}");
+            }
+
+            return tooLarge;
+        }
+
         /// <summary>
         /// Tries to find an existing texture, or create a new one if not found.
         /// </summary>
@@ -690,6 +710,16 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                 // If address is still invalid, the texture is fully unmapped, so it has no data, just return null.
                 if (address == MemoryManager.PteUnmapped)
+                {
+                    if (GpuContext.Nx2AllocationTrace && _nx2UnmappedTraced.Add(info.GpuAddress))
+                    {
+                        Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 texture at 0x{info.GpuAddress:X} fully unmapped: {info.Target} {info.Width}x{info.Height}x{info.DepthOrLayers} levels {info.Levels} {info.FormatInfo.Format}");
+                    }
+
+                    return null;
+                }
+
+                if (_context.Nx2Ampere && _context.Nx2InSparseRegion(info.GpuAddress) && Nx2TooLargeSparseTexture(info, layerSize))
                 {
                     return null;
                 }
@@ -1392,10 +1422,16 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <returns>The physical regions for the texture, found when evaluating whether the texture was partially mapped</returns>
         public MultiRange UpdatePartiallyMapped(MemoryManager memoryManager, ulong address, Texture texture)
         {
-            MultiRange range;
+            return UpdatePartiallyMapped(memoryManager.GetPhysicalRegions(address, texture.Size), texture);
+        }
+
+        /// <summary>
+        /// Updates the partially mapped state of a texture from the memory it covers now.
+        /// </summary>
+        public MultiRange UpdatePartiallyMapped(MultiRange range, Texture texture)
+        {
             lock (_partiallyMappedTextures)
             {
-                range = memoryManager.GetPhysicalRegions(address, texture.Size);
                 bool partiallyMapped = false;
 
                 for (int i = 0; i < range.Count; i++)

@@ -189,7 +189,8 @@ namespace Ryujinx.Graphics.Gpu.Image
                 // descriptor address before decoding format, dimensions, or layout fields.
                 ulong address = descriptor.UnpackAddress();
 
-                if (address == 0 || !_channel.MemoryManager.IsMapped(address))
+                // Switch 2 virtual textures live in sparse regions where only the resident tiles are mapped.
+                if (address == 0 || (!_channel.MemoryManager.IsMapped(address) && !(Context.Nx2Ampere && Context.Nx2InSparseRegion(address))))
                 {
                     _invalidMap.Set(id);
                     return ref descriptor;
@@ -210,8 +211,8 @@ namespace Ryujinx.Graphics.Gpu.Image
                         return ref descriptor;
                     }
 
-                    TextureInfo info = GetInfo(descriptor, out int layerSize);
-                    texture = PhysicalMemory.TextureCache.FindOrCreateTexture(_channel.MemoryManager, TextureSearchFlags.ForSampler, info, layerSize);
+                    TextureInfo info = Nx2GetInfo(descriptor, out int layerSize, out bool nx2Unsupported, out MultiRange? nx2Range, out object nx2Packing);
+                    texture = nx2Unsupported ? null : Nx2FindOrCreateTexture(info, layerSize, nx2Range, nx2Packing);
 
                     // If this happens, then the texture address is invalid, we can't add it to the cache.
                     if (texture == null)
@@ -341,9 +342,9 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                 if (texture == null)
                 {
-                    TextureInfo info = GetInfo(descriptor, out int layerSize);
+                    TextureInfo info = Nx2GetInfo(descriptor, out int layerSize, out bool nx2Unsupported, out MultiRange? nx2Range, out object nx2Packing);
                     info = ChangeFormat(info, formatInfo);
-                    texture = PhysicalMemory.TextureCache.FindOrCreateTexture(_channel.MemoryManager, TextureSearchFlags.ForSampler, info, layerSize);
+                    texture = nx2Unsupported ? null : Nx2FindOrCreateTexture(info, layerSize, nx2Range, nx2Packing);
 
                     if (texture != null)
                     {
@@ -440,7 +441,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                         continue;
                     }
 
-                    MultiRange range = _channel.MemoryManager.Physical.TextureCache.UpdatePartiallyMapped(_channel.MemoryManager, address, texture);
+                    MultiRange range = _channel.MemoryManager.Physical.TextureCache.UpdatePartiallyMapped(Nx2CurrentRange(address, texture), texture);
 
                     // If the texture is not mapped at all, delete its reference.
 
@@ -460,7 +461,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                     // Refetch the range. Changes since the last check could have been lost
                     // as the cache entry was not restored (required to queue mapping change).
 
-                    range = _channel.MemoryManager.GetPhysicalRegions(address, texture.Size);
+                    range = Nx2CurrentRange(address, texture);
 
                     if (!range.Equals(texture.Range))
                     {
@@ -549,7 +550,127 @@ namespace Ryujinx.Graphics.Gpu.Image
         private static readonly bool _nx2BigTextureTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_BIGTEX_TRACE") == "1";
         private static readonly ConcurrentDictionary<ulong, byte> _nx2BigTextures = new();
 
-        private static TextureInfo GetInfo(in TextureDescriptor descriptor, out int layerSize)
+        // RYUJINX_NX2_SPARSE_TEXTURE_MAX_MB (default 512): Switch 2 virtual textures (8192x8192x68 terrain
+        // arrays in sparse regions, 1.4-1.7 GiB each) are created from the first mip level that fits, as Lichii
+        // does: the sampled levels below stay, the largest ones are dropped.
+        internal static readonly ulong Nx2SparseTextureMax = (ulong.TryParse(Environment.GetEnvironmentVariable("RYUJINX_NX2_SPARSE_TEXTURE_MAX_MB"), out ulong mb) ? mb : 512) << 20;
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _nx2SparseLogged = new();
+
+        /// <summary>
+        /// How a Switch 2 virtual texture's layers are gathered: the levels kept of each layer (Piece bytes) are
+        /// taken from every Stride bytes of the sparse region and packed together, so a texture whose layers
+        /// sit far apart (68 layers of 89 MiB) has a range only as large as its host data.
+        /// </summary>
+        private sealed class Nx2Packing
+        {
+            public ulong Stride;
+            public ulong Piece;
+            public int Layers;
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Texture, Nx2Packing> _nx2Packed = new();
+
+        private TextureInfo Nx2GetInfo(in TextureDescriptor descriptor, out int layerSize, out bool unsupported, out MultiRange? range, out object packing)
+        {
+            TextureInfo info = GetInfo(descriptor, out layerSize);
+            unsupported = false;
+            range = null;
+            packing = null;
+
+            if (!Context.Nx2Ampere || !Context.Nx2InSparseRegion(descriptor.UnpackAddress()))
+            {
+                return info;
+            }
+
+            int levels = descriptor.UnpackLevels();
+
+            for (int skip = 1; (ulong)info.CalculateSizeInfo(0).TotalSize > Nx2SparseTextureMax && descriptor.UnpackBaseLevel() + skip <= descriptor.UnpackMaxLevelInclusive() && skip < levels; skip++)
+            {
+                info = GetInfo(descriptor, out layerSize, skip);
+            }
+
+            SizeInfo packedSize = info.CalculateSizeInfo(0);
+            int layers = info.GetLayers();
+
+            if (layers > 1 && layerSize > packedSize.LayerSize)
+            {
+                Nx2Packing layout = new() { Stride = (ulong)layerSize, Piece = (ulong)packedSize.LayerSize, Layers = layers };
+
+                range = Nx2PackedRange(info.GpuAddress, layout);
+                packing = layout;
+                layerSize = 0;
+            }
+
+            // Texture sizes and offsets are 32-bit.
+            long guestSize = range != null ? packedSize.TotalSize : (long)layerSize * Math.Max(layers - 1, 0) + packedSize.TotalSize;
+
+            unsupported = guestSize > int.MaxValue;
+
+            if (_nx2SparseLogged.TryAdd(descriptor.UnpackAddress(), 0))
+            {
+                Logger.Info?.Print(LogClass.Gpu, $"Switch 2 virtual texture 0x{descriptor.UnpackAddress():X} as 0x{info.GpuAddress:X}: {info.Target} {info.Width}x{info.Height}x{info.DepthOrLayers} levels {info.Levels} {info.FormatInfo.Format}, " +
+                    (packing is Nx2Packing p ? $"layers of 0x{p.Piece:x} packed from a 0x{p.Stride:x} stride, " : "") + $"0x{guestSize:x} bytes{(unsupported ? ", left unbound" : "")}");
+            }
+
+            return info;
+        }
+
+        private MultiRange Nx2PackedRange(ulong address, Nx2Packing layout)
+        {
+            List<MemoryRange> ranges = [];
+
+            for (int layer = 0; layer < layout.Layers; layer++)
+            {
+                MultiRange layerRange = _channel.MemoryManager.GetPhysicalRegions(address + (ulong)layer * layout.Stride, layout.Piece);
+
+                for (int index = 0; index < layerRange.Count; index++)
+                {
+                    MemoryRange subRange = layerRange.GetSubRange(index);
+
+                    if (ranges.Count != 0)
+                    {
+                        MemoryRange last = ranges[^1];
+                        bool unmapped = last.Address == MemoryManager.PteUnmapped && subRange.Address == MemoryManager.PteUnmapped;
+
+                        if (unmapped || (last.Address != MemoryManager.PteUnmapped && last.Address + last.Size == subRange.Address))
+                        {
+                            ranges[^1] = new MemoryRange(last.Address, last.Size + subRange.Size);
+
+                            continue;
+                        }
+                    }
+
+                    ranges.Add(subRange);
+                }
+            }
+
+            return new MultiRange(ranges.ToArray());
+        }
+
+        private Texture Nx2FindOrCreateTexture(TextureInfo info, int layerSize, MultiRange? range, object packing)
+        {
+            Texture texture = PhysicalMemory.TextureCache.FindOrCreateTexture(_channel.MemoryManager, TextureSearchFlags.ForSampler, info, layerSize, null, range);
+
+            if (texture != null && packing is Nx2Packing layout)
+            {
+                _nx2Packed.AddOrUpdate(texture, layout);
+            }
+
+            return texture;
+        }
+
+        /// <summary>
+        /// The memory a texture covers now: its packed layers for a Switch 2 virtual texture.
+        /// </summary>
+        private MultiRange Nx2CurrentRange(ulong descriptorAddress, Texture texture)
+        {
+            return _nx2Packed.TryGetValue(texture, out Nx2Packing layout)
+                ? Nx2PackedRange(texture.Info.GpuAddress, layout)
+                : _channel.MemoryManager.GetPhysicalRegions(descriptorAddress, texture.Size);
+        }
+
+        private static TextureInfo GetInfo(in TextureDescriptor descriptor, out int layerSize, int skippedLevels = 0)
         {
             int depthOrLayers = descriptor.UnpackDepth();
             int levels = descriptor.UnpackLevels();
@@ -615,7 +736,7 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             layerSize = 0;
 
-            int minLod = descriptor.UnpackBaseLevel();
+            int minLod = descriptor.UnpackBaseLevel() + skippedLevels;
             int maxLod = descriptor.UnpackMaxLevelInclusive();
 
             // Linear textures don't support mipmaps, so we don't handle this case here.

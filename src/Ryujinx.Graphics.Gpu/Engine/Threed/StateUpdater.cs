@@ -1564,7 +1564,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         private CachedShaderProgram Nx2GetGraphicsShader(ShaderCache shaderCache, int samplerPoolMaximumId, ShaderAddresses addresses, Shader.Nx2.Nx2MeshDraw nx2Mesh)
         {
             Nx2DumpPrograms(addresses);
-            if (GpuContext.Nx2PresentTrace || Nx2PassDumper.Active || DrawManager.Nx2WatchesUniforms)
+            if (GpuContext.Nx2PresentTrace || Nx2PassDumper.Active || DrawManager.Nx2WatchesUniforms || Image.TextureBindingsManager._nx2BindTrace)
             {
                 GpuContext.Nx2LastProgram = $"VS 0x{addresses.VertexB:X} TCS 0x{addresses.TessControl:X} TES 0x{addresses.TessEvaluation:X} GS 0x{addresses.Geometry:X} FS 0x{addresses.Fragment:X}";
             }

@@ -134,6 +134,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="range">Ranges of physical memory where the data is located</param>
         /// <param name="tracked">True if read tracking is triggered on the span</param>
         /// <returns>A read only span of the data at the specified memory location</returns>
+        private static int _nx2UnmappedReads;
+
         public ReadOnlySpan<byte> GetSpan(MultiRange range, bool tracked = false)
         {
             if (range.Count == 1)
@@ -153,7 +155,16 @@ namespace Ryujinx.Graphics.Gpu.Memory
             {
                 MemoryRange currentRange = range.GetSubRange(i);
                 int size = (int)currentRange.Size;
-                if (currentRange.Address != MemoryManager.PteUnmapped)
+
+                // Switch 2 sparse textures: a GPU mapping can name CPU memory the process does not map.
+                if (currentRange.Address != MemoryManager.PteUnmapped && range.Count > 1 && !_cpuMemory.IsRangeMapped(currentRange.Address, (ulong)size))
+                {
+                    if (_nx2UnmappedReads++ < 16)
+                    {
+                        Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"GPU read of CPU memory not mapped by the process: 0x{currentRange.Address:X}+0x{size:x} (left zero)");
+                    }
+                }
+                else if (currentRange.Address != MemoryManager.PteUnmapped)
                 {
                     _cpuMemory.GetSpan(currentRange.Address, size, tracked).CopyTo(data.Slice(offset, size));
                 }

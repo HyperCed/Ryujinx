@@ -117,6 +117,47 @@ namespace Ryujinx.Graphics.Gpu
             }
         }
 
+        private readonly Dictionary<ulong, ulong> _nx2SparseRegions = new();
+
+        /// <summary>
+        /// Registers an unbacked Switch 2 sparse region (gpu 214): virtual textures there have only the tiles
+        /// the game maps (216), and their first page may well be unmapped.
+        /// </summary>
+        public void Nx2AddSparseRegion(ulong address, ulong size)
+        {
+            lock (_nx2SparseRegions)
+            {
+                _nx2SparseRegions[address] = size;
+            }
+        }
+
+        public void Nx2RemoveSparseRegion(ulong address)
+        {
+            lock (_nx2SparseRegions)
+            {
+                _nx2SparseRegions.Remove(address);
+            }
+        }
+
+        /// <summary>
+        /// Whether a GPU address lies in an unbacked Switch 2 sparse region.
+        /// </summary>
+        internal bool Nx2InSparseRegion(ulong address)
+        {
+            lock (_nx2SparseRegions)
+            {
+                foreach ((ulong start, ulong size) in _nx2SparseRegions)
+                {
+                    if (address >= start && address - start < size)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         public void Nx2RemoveGpuOnlyRegion(ulong address)
         {
             lock (_nx2GpuOnlyRegions)

@@ -314,6 +314,11 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                 else
                 {
                     Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 214 {((flags & SparseRegionFlag) != 0 ? "sparse" : "GPU-only")} region [{start:x}, {last:x}] ({size >> 20} MiB, flags 0x{flags:x}) not backed");
+
+                    if (sparse && last > start)
+                    {
+                        context.Device.Gpu.Nx2AddSparseRegion(start, size);
+                    }
                 }
             }
 
@@ -442,6 +447,8 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
 
         private void DestroyRegion(ServiceCtx context, ulong start)
         {
+            context.Device.Gpu.Nx2RemoveSparseRegion(start);
+
             if (!_regions.Remove(start, out (ulong CpuAddress, ulong Size) region))
             {
                 return;
@@ -531,12 +538,17 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
         private static readonly bool _sparseTrace = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_SPARSE_TRACE") == "1";
         private static int _sparseTraces;
 
+        // RYUJINX_NX2_SPARSE_TRACE_RANGE=<hex start>-<hex end>: only the requests starting in that range.
+        private static readonly ulong[] _sparseTraceRange = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_SPARSE_TRACE_RANGE")?.Split('-') is [string from, string to] ? [System.Convert.ToUInt64(from, 16), System.Convert.ToUInt64(to, 16)] : [0, ulong.MaxValue];
+        private static readonly ulong _sparseTraceFrom = _sparseTraceRange[0];
+        private static readonly ulong _sparseTraceTo = _sparseTraceRange[1];
+
         // RYUJINX_NX2_SPARSE_OVERRIDE=1: the game's own mappings replace the memory backing GPU-only regions.
         private static readonly bool _sparseOverridesBacking = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_SPARSE_OVERRIDE") == "1";
 
         private void ApplySparseMapRequest(SparseMapRequest request)
         {
-            if (_sparseTrace && System.Threading.Interlocked.Increment(ref _sparseTraces) <= 2000)
+            if (_sparseTrace && (request.GpuAddress >= _sparseTraceFrom && request.GpuAddress < _sparseTraceTo) && System.Threading.Interlocked.Increment(ref _sparseTraces) <= 2000)
             {
                 Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 216 map [{request.GpuAddress:x}, +{request.Size:x}] handle {request.MemoryHandle} offset 0x{request.Offset:x} kind 0x{request.Kind:x}");
             }

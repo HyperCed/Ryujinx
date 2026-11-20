@@ -74,7 +74,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         {
             for (int index = 0; index < _rtColors.Length; index++)
             {
-                if (_rtColors[index]?.Info.GpuAddress == Nx2PassDumper.TargetRenderTarget)
+                if (_rtColors[index] != null && Nx2PassDumper.IsTargetRenderTarget(_rtColors[index].Info.GpuAddress))
                 {
                     Nx2PassDumper.Dump(_rtColors[index], $"afterdraw_rt{index}", program);
                 }

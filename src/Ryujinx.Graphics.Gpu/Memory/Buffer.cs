@@ -773,6 +773,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
 
             ReadOnlySpan<uint> words = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, uint>(_physicalMemory.GetSpan(start, (int)(end - start)));
             int nan = 0, first = -1;
+            uint firstValue = 0;
 
             for (int i = 0; i < words.Length; i++)
             {
@@ -781,14 +782,18 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 if ((word & 0x7f800000) == 0x7f800000 && (word & 0x7fffff) != 0 && (word == 0x7fc00000 || word == 0xffc00000 || word == 0x7fffffff))
                 {
                     nan++;
-                    first = first < 0 ? i : first;
+                    if (first < 0)
+                    {
+                        first = i;
+                        firstValue = word;
+                    }
                 }
             }
 
             if (nan != 0)
             {
                 _nx2NaNReports++;
-                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 flush trace: buffer 0x{Address:X}+0x{Size:x} read back with {nan} NaN words in 0x{start:X}+0x{end - start:x}, first at 0x{start + (ulong)first * 4:X}");
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 flush trace: buffer 0x{Address:X}+0x{Size:x} read back with {nan} NaN words in 0x{start:X}+0x{end - start:x}, first at 0x{start + (ulong)first * 4:X} = 0x{firstValue:x8}");
             }
         }
 

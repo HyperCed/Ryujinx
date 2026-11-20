@@ -30,12 +30,20 @@ namespace Ryujinx.Graphics.Gpu
 
         public static bool Enabled => _directory != null;
 
+        // RYUJINX_NX2_PASS_DUMP_NOPNG=1: statistics only.
+        private static readonly bool _noPng = Environment.GetEnvironmentVariable("RYUJINX_NX2_PASS_DUMP_NOPNG") == "1";
+
         // RYUJINX_NX2_PASS_DUMP_PROGRAM=<hex address>: also save the textures that program's draws sample.
         private static readonly string _targetProgram = Environment.GetEnvironmentVariable("RYUJINX_NX2_PASS_DUMP_PROGRAM")?.ToUpperInvariant();
         private static int _targetDraws;
 
-        // RYUJINX_NX2_PASS_DUMP_RT=<hex GPU address>: save that render target after every draw into it.
-        public static readonly ulong TargetRenderTarget = ulong.TryParse(Environment.GetEnvironmentVariable("RYUJINX_NX2_PASS_DUMP_RT"), System.Globalization.NumberStyles.HexNumber, null, out ulong rt) ? rt : 0;
+        // RYUJINX_NX2_PASS_DUMP_RT=<hex GPU address>[-<hex end>]: save the render targets at that address (or in
+        // that range) after every draw into them.
+        private static readonly string[] _targetRange = Environment.GetEnvironmentVariable("RYUJINX_NX2_PASS_DUMP_RT")?.Split('-');
+        public static readonly ulong TargetRenderTarget = _targetRange != null ? System.Convert.ToUInt64(_targetRange[0], 16) : 0;
+        private static readonly ulong _targetRenderTargetEnd = _targetRange?.Length == 2 ? System.Convert.ToUInt64(_targetRange[1], 16) : TargetRenderTarget + 1;
+
+        public static bool IsTargetRenderTarget(ulong address) => address >= TargetRenderTarget && address < _targetRenderTargetEnd;
 
         /// <summary>
         /// Saves raw bytes next to the passes (constant buffers of a traced draw).
@@ -121,7 +129,7 @@ namespace Ryujinx.Graphics.Gpu
 
                 _summary.WriteLine($"{name}: {stats}{(program != null ? $" [{program}]" : "")}");
 
-                if (rgba != null)
+                if (rgba != null && !_noPng)
                 {
                     WritePng(Path.Combine(_directory, name + ".png"), width, height, rgba);
                 }
