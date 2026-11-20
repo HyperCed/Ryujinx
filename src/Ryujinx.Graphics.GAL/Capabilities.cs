@@ -33,6 +33,7 @@ namespace Ryujinx.Graphics.GAL
         public readonly bool SupportsGeometryShaderPassthrough;
         public readonly bool SupportsTransformFeedback;
         public readonly bool SupportsImageLoadFormatted;
+        public readonly bool SupportsImageStoreWithoutFormat;
         public readonly bool SupportsLayerVertexTessellation;
         public readonly bool SupportsMismatchingViewFormat;
         public readonly bool SupportsCubemapView;
@@ -50,6 +51,7 @@ namespace Ryujinx.Graphics.GAL
         public readonly bool SupportsViewportMask;
         public readonly bool SupportsViewportSwizzle;
         public readonly bool SupportsIndirectParameters;
+        public readonly bool SupportsMeshShaders;
         public readonly bool SupportsDepthClipControl;
 
         public readonly int UniformBufferSetIndex;
@@ -102,6 +104,7 @@ namespace Ryujinx.Graphics.GAL
             bool supportsGeometryShaderPassthrough,
             bool supportsTransformFeedback,
             bool supportsImageLoadFormatted,
+            bool supportsImageStoreWithoutFormat,
             bool supportsLayerVertexTessellation,
             bool supportsMismatchingViewFormat,
             bool supportsCubemapView,
@@ -119,6 +122,7 @@ namespace Ryujinx.Graphics.GAL
             bool supportsViewportMask,
             bool supportsViewportSwizzle,
             bool supportsIndirectParameters,
+            bool supportsMeshShaders,
             bool supportsDepthClipControl,
             int uniformBufferSetIndex,
             int storageBufferSetIndex,
@@ -165,6 +169,7 @@ namespace Ryujinx.Graphics.GAL
             SupportsGeometryShaderPassthrough = supportsGeometryShaderPassthrough;
             SupportsTransformFeedback = supportsTransformFeedback;
             SupportsImageLoadFormatted = supportsImageLoadFormatted;
+            SupportsImageStoreWithoutFormat = supportsImageStoreWithoutFormat;
             SupportsLayerVertexTessellation = supportsLayerVertexTessellation;
             SupportsMismatchingViewFormat = supportsMismatchingViewFormat;
             SupportsCubemapView = supportsCubemapView;
@@ -182,6 +187,7 @@ namespace Ryujinx.Graphics.GAL
             SupportsViewportMask = supportsViewportMask;
             SupportsViewportSwizzle = supportsViewportSwizzle;
             SupportsIndirectParameters = supportsIndirectParameters;
+            SupportsMeshShaders = supportsMeshShaders;
             SupportsDepthClipControl = supportsDepthClipControl;
             UniformBufferSetIndex = uniformBufferSetIndex;
             StorageBufferSetIndex = storageBufferSetIndex;

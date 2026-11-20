@@ -807,6 +807,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
         {
             AstTextureOperation texOp = (AstTextureOperation)operation;
 
+            if (texOp.Format == TextureFormat.Unknown)
+            {
+                context.AddCapability(Capability.StorageImageWriteWithoutFormat);
+            }
+
             bool isArray = (texOp.Type & SamplerType.Array) != 0;
 
             int srcIndex = 0;

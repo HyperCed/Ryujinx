@@ -537,6 +537,10 @@ namespace Ryujinx.Graphics.Shader.Instructions
             }
 
             // TODO: FP and 64-bit formats.
+            // Reduction operations are integer atomics. If the guest descriptor does not expose
+            // a known format, GetTextureFormatAtomic supplies the R32Sint fallback required by
+            // SPIR-V. Dropping the operation changes counters and depth/visibility reductions,
+            // which can remove large parts of the rendered scene.
             TextureFormat format = size is SuatomSize.Sd32 or SuatomSize.Sd64
                 ? (isBindless ? TextureFormat.Unknown : ShaderProperties.GetTextureFormatAtomic(context.TranslatorContext.GpuAccessor, imm))
                 : GetTextureFormat(size);
@@ -646,7 +650,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
                 if (!isBindless)
                 {
-                    format = ShaderProperties.GetTextureFormat(context.TranslatorContext.GpuAccessor, imm);
+                    format = ShaderProperties.GetTextureFormatForImageStore(context.TranslatorContext.GpuAccessor, imm);
                 }
             }
             else

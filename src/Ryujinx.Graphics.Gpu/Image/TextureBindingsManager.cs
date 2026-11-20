@@ -41,6 +41,8 @@ namespace Ryujinx.Graphics.Gpu.Image
         private SamplerPool _cachedSamplerPool;
 
         private TextureBindingInfo[][] _textureBindings;
+        // RYUJINX_NX2_TEXTURE_TRACE=1 raises the distinct texture-binding trace limit for shader analysis.
+        private static readonly bool _nx2ExtendedTextureTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_TEXTURE_TRACE") == "1";
         private int _nx2TextureTraces;
         private readonly HashSet<(int, ulong)> _nx2TracedTextures = [];
         private TextureBindingInfo[][] _imageBindings;
@@ -580,13 +582,14 @@ namespace Ryujinx.Graphics.Gpu.Image
                         (texture == null ? $"no texture (descriptor address 0x{descriptor.UnpackAddress():X}, format 0x{descriptor.UnpackFormat():x})" : $"has {texture.Target} {texture.Info.Width}x{texture.Info.Height}x{texture.Info.DepthOrLayers} {texture.Format}{(hostTexture == null ? " -> NULL view" : "")}"));
                 }
 
-                if (GpuContext.Nx2PresentTrace && _context.Nx2Ampere && stage == ShaderStage.Fragment && _nx2TextureTraces < 80 &&
+                if (GpuContext.Nx2PresentTrace && _context.Nx2Ampere && stage == ShaderStage.Fragment &&
+                    _nx2TextureTraces < (_nx2ExtendedTextureTrace ? 2000 : 80) &&
                     _nx2TracedTextures.Add((textureId, descriptor.UnpackAddress())))
                 {
                     _nx2TextureTraces++;
                     Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
                         $"Switch 2 fragment texture binding {bindingInfo.Binding}: handle c[{textureBufferIndex}][0x{bindingInfo.Handle * 4:x}] = 0x{packedId:x} -> texture {textureId} sampler {samplerId}: descriptor address 0x{descriptor.UnpackAddress():X} {descriptor.UnpackWidth()}x{descriptor.UnpackHeight()} format 0x{descriptor.UnpackFormat():x}, " +
-                        $"texture {(texture == null ? "none" : $"{texture.Info.Width}x{texture.Info.Height} {texture.Info.FormatInfo.Format} {texture.Info.Target}")}");
+                        $"texture {(texture == null ? "none" : $"{texture.Info.Width}x{texture.Info.Height} {texture.Info.FormatInfo.Format} {texture.Info.Target}")}, program {GpuContext.Nx2LastProgram}");
                 }
 
                 if (hostTexture != null && texture.Target == Target.TextureBuffer)

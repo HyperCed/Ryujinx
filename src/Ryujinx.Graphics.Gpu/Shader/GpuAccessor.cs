@@ -18,6 +18,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         private readonly int _stageIndex;
         private readonly bool _compute;
         private readonly bool _isVulkan;
+        private readonly bool _supportsMeshShaders;
         private readonly bool _hasGeometryShader;
         private readonly bool _supportsQuads;
 
@@ -40,6 +41,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
             _state = state;
             _stageIndex = stageIndex;
             _isVulkan = context.Capabilities.Api == TargetApi.Vulkan;
+            _supportsMeshShaders = context.Capabilities.SupportsMeshShaders;
             _hasGeometryShader = hasGeometryShader;
             _supportsQuads = context.Capabilities.SupportsQuads;
 
@@ -85,7 +87,8 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <summary>
         /// Makes the program translate as a Switch 2 task or mesh program.
         /// </summary>
-        public void Nx2SetMesh(Ryujinx.Graphics.Shader.Translation.Nx2MeshState state) => _nx2Mesh = state;
+        public void Nx2SetMesh(Ryujinx.Graphics.Shader.Translation.Nx2MeshState state) =>
+            _nx2Mesh = state.WithComputeFallback(_isVulkan && !_supportsMeshShaders);
 
         /// <summary>
         /// Sets the generic inputs of a fragment program that the mesh program before it writes per primitive.
@@ -111,7 +114,11 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <inheritdoc/>
         public void Log(string message)
         {
-            Logger.Warning?.Print(LogClass.Gpu, $"Shader translator: {message}");
+            string shaderContext = _nx2Code == null
+                ? string.Empty
+                : $"Switch 2 {(_compute ? "compute" : $"graphics stage {_stageIndex}")} shader 0x{_nx2CodeAddress:X}: ";
+
+            Logger.Warning?.Print(LogClass.Gpu, $"Shader translator: {shaderContext}{message}");
         }
 
         /// <inheritdoc/>

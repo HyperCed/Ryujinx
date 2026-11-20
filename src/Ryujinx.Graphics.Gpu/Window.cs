@@ -197,6 +197,8 @@ namespace Ryujinx.Graphics.Gpu
         /// <param name="swapBuffersCallback">Callback method to call when a new texture should be presented on the screen</param>
         private int _presentTraces;
         private int _presentStats;
+        private static readonly string _nx2PresentDump = Environment.GetEnvironmentVariable("RYUJINX_PRESENT_DUMP");
+        private bool _presentDumped;
 
         public void Present(Action swapBuffersCallback)
         {
@@ -263,6 +265,32 @@ namespace Ryujinx.Graphics.Gpu
                     }
 
                     Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Present: texture #{texture.GetHashCode():x} content: {nonZero} of {bytes.Length / 64} sampled pixels non-black, mean {(double)sum / 3 / Math.Max(1, bytes.Length / 64):F1}, bytes {bytes.Length}");
+
+                    if (_nx2PresentDump != null && !_presentDumped)
+                    {
+                        _presentDumped = true;
+                        int width = texture.Info.Width;
+                        int height = texture.Info.Height;
+
+                        if (bytes.Length == (long)width * height * 4)
+                        {
+                            byte[] ppm = new byte[bytes.Length / 4 * 3 + 32];
+                            int headerLength = System.Text.Encoding.ASCII.GetBytes($"P6\n{width} {height}\n255\n", ppm);
+
+                            for (int source = 0, destination = headerLength; source < bytes.Length; source += 4)
+                            {
+                                ppm[destination++] = bytes[source];
+                                ppm[destination++] = bytes[source + 1];
+                                ppm[destination++] = bytes[source + 2];
+                            }
+
+                            System.IO.File.WriteAllBytes(_nx2PresentDump, ppm.AsSpan(0, headerLength + width * height * 3).ToArray());
+                        }
+                        else
+                        {
+                            Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Present dump skipped: expected RGBA8 data for {width}x{height}, got {bytes.Length} bytes");
+                        }
+                    }
                 }
 
                 texture.SynchronizeMemory();

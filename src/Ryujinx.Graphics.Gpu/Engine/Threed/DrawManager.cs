@@ -46,6 +46,9 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
         private const int VertexBufferFirstMethodOffset = 0x35d;
         private const int IndexBufferCountMethodOffset = 0x5f8;
+        // RYUJINX_NX2_DRAW_TRACE=1 logs non-trivial draws to large color targets.
+        private static readonly bool _nx2DrawTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_DRAW_TRACE") == "1";
+        private int _nx2SceneDrawTraces;
 
         /// <summary>
         /// Creates a new instance of the draw manager.
@@ -177,6 +180,21 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             _currentSpecState.SetHasConstantBufferDrawParameters(false);
 
             engine.UpdateState();
+
+            if (_nx2DrawTrace && _context.Nx2Ampere && _nx2SceneDrawTraces < 1000 &&
+                (_drawState.Nx2MeshDraw || (_state.State.RtColorMask[0].Packed != 0 && (indexCount > 6 || drawVertexCount > 6))))
+            {
+                ref var colorState = ref _state.State.RtColorState[0];
+
+                if (colorState.Address.Pack() != 0 && colorState.WidthOrStride >= 1920 && colorState.Height >= 1080)
+                {
+                    _nx2SceneDrawTraces++;
+                    ref var viewport = ref _state.State.ViewportExtents[0];
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                        $"Switch 2 scene draw to 0x{colorState.Address.Pack():X}: {colorState.WidthOrStride}x{colorState.Height} {colorState.Format}, indexed {_drawState.DrawIndexed}, first index {firstIndex} count {indexCount}, vertices {drawFirstVertex}+{drawVertexCount}, " +
+                        $"viewport {viewport.X},{viewport.Y} {viewport.Width}x{viewport.Height}, rt control 0x{_state.State.RtControl.Packed:x}, color mask 0x{_state.State.RtColorMask[0].Packed:x}, mesh {_drawState.Nx2MeshDraw}, program {GpuContext.Nx2LastProgram}");
+                }
+            }
 
             if (GpuContext.Nx2PresentTrace && _context.Nx2Ampere && _nx2DrawTraces < 40 && _state.State.RtColorState[0].Address.Pack() == GpuContext.Nx2PresentedAddress)
             {

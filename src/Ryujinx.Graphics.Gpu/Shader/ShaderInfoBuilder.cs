@@ -41,7 +41,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <param name="context">GPU context that owns the shaders that will be added to the builder</param>
         /// <param name="tfEnabled">Indicates if the graphics shader is used with transform feedback enabled</param>
         /// <param name="vertexAsCompute">Indicates that the vertex shader will be emulated on a compute shader</param>
-        public ShaderInfoBuilder(GpuContext context, bool tfEnabled, bool vertexAsCompute = false)
+        public ShaderInfoBuilder(GpuContext context, bool tfEnabled, bool vertexAsCompute = false, bool nx2MeshAsCompute = false)
         {
             _context = context;
 
@@ -69,7 +69,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
             AddDescriptor(SupportBufferStages, ResourceType.UniformBuffer, uniformSetIndex, 0, 1);
             AddUsage(SupportBufferStages, ResourceType.UniformBuffer, uniformSetIndex, 0, 1);
 
-            ResourceReservationCounts rrc = new(!context.Capabilities.SupportsTransformFeedback && tfEnabled, vertexAsCompute);
+            ResourceReservationCounts rrc = new(!context.Capabilities.SupportsTransformFeedback && tfEnabled, vertexAsCompute, nx2MeshAsCompute);
 
             _reservedConstantBuffers = rrc.ReservedConstantBuffers;
             _reservedStorageBuffers = rrc.ReservedStorageBuffers;
@@ -77,7 +77,9 @@ namespace Ryujinx.Graphics.Gpu.Shader
             _reservedImages = rrc.ReservedImages;
 
             // TODO: Handle that better? Maybe we should only set the binding that are really needed on each shader.
-            ResourceStages stages = vertexAsCompute ? ResourceStages.Compute | ResourceStages.Vertex : VtgStages;
+            ResourceStages stages = vertexAsCompute || nx2MeshAsCompute
+                ? ResourceStages.Compute | ResourceStages.Vertex
+                : VtgStages;
 
             PopulateDescriptorAndUsages(stages, ResourceType.UniformBuffer, uniformSetIndex, 1, rrc.ReservedConstantBuffers - 1);
             PopulateDescriptorAndUsages(stages, ResourceType.StorageBuffer, storageSetIndex, 0, rrc.ReservedStorageBuffers, true);

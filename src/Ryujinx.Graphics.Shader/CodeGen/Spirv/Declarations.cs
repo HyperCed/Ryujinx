@@ -516,7 +516,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 }
 
                 if (!isOutput &&
-                    context.Definitions.Stage is ShaderStage.Task or ShaderStage.Mesh &&
+                    context.Definitions.Nx2Mesh != null &&
                     Nx2MeshCodeGen.IsEmulatedSubgroupInput(ioVariable))
                 {
                     // Metal object and mesh functions have no subgroup built-ins: a private variable the

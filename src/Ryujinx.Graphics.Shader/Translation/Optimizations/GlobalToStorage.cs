@@ -648,6 +648,13 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                     {
                         phis.Enqueue(phi2);
                     }
+                    else if (TryGetBaseAddressPhi(phiBlock, phiSource, out phi2) && visited.Add(phi2))
+                    {
+                        // A global address can be formed by adding an offset to a pointer selected by
+                        // a nested phi. Walk that pointer phi too so every possible storage buffer is
+                        // included in the generated range checks.
+                        phis.Enqueue(phi2);
+                    }
                 }
             }
 
@@ -655,7 +662,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 
             if (targetCbs.Count == 0)
             {
-                gpuAccessor.Log($"Failed to find storage buffer for global memory operation \"{operation.Inst}\".");
+                gpuAccessor.Log($"Failed to find storage buffer for global memory operation \"{operation.Inst}\" with address {DescribeOperand(operation.GetSource(0), 0)}.");
             }
 
             if (gtsContext.TryGetFunctionId(operation, isMultiTarget: true, targetCbs, out functionId))
@@ -772,6 +779,76 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             functionId = gtsContext.AddFunction(operation, isMultiTarget: true, targetCbs, function);
 
             return true;
+        }
+
+        private static bool TryGetBaseAddressPhi(BasicBlock block, Operand address, out PhiNode phi)
+        {
+            address = Utils.FindLastOperation(address, block);
+
+            if (address.AsgOp is Operation operation && operation.Inst == Instruction.Add && operation.SourcesCount >= 2)
+            {
+                Operand src1 = operation.GetSource(0);
+                Operand src2 = operation.GetSource(1);
+
+                if (src1.AsgOp is not PhiNode)
+                {
+                    src1 = Utils.FindLastOperation(src1, block);
+                }
+
+                if (src2.AsgOp is not PhiNode)
+                {
+                    src2 = Utils.FindLastOperation(src2, block);
+                }
+
+                Operand baseAddress;
+
+                if ((src1.Type == OperandType.LocalVariable && src2.Type == OperandType.Constant) ||
+                    (src2.Type == OperandType.LocalVariable && src1.Type == OperandType.Constant))
+                {
+                    baseAddress = src1.Type == OperandType.LocalVariable ? src1 : src2;
+                }
+                else if (src1.Type != OperandType.ConstantBuffer ||
+                         (src1.Type == OperandType.ConstantBuffer && src2.Type == OperandType.ConstantBuffer) ||
+                         (src2.Type == OperandType.ConstantBuffer && src2.GetCbufSlot() == DriverReservedCb))
+                {
+                    baseAddress = src2;
+                }
+                else
+                {
+                    baseAddress = src1;
+                }
+
+                if (baseAddress.AsgOp is PhiNode basePhi)
+                {
+                    phi = basePhi;
+                    return true;
+                }
+            }
+
+            phi = null;
+            return false;
+        }
+
+        private static string DescribeOperand(Operand operand, int depth)
+        {
+            if (operand == null || depth >= 5)
+            {
+                return operand == null ? "null" : $"{operand.Type}({operand.Value})";
+            }
+
+            string value = operand.Type switch
+            {
+                OperandType.ConstantBuffer => $"c[{operand.GetCbufSlot()}][0x{operand.GetCbufOffset():x}]",
+                OperandType.Constant => $"0x{operand.Value:x}",
+                OperandType.Register => $"r{operand.GetRegister().Index}",
+                OperandType.LocalVariable when operand.AsgOp is Operation operation =>
+                    $"{operation.Inst}/{operation.StorageKind}({string.Join(", ", Enumerable.Range(0, operation.SourcesCount).Select(i => DescribeOperand(operation.GetSource(i), depth + 1)))} )",
+                OperandType.LocalVariable when operand.AsgOp is PhiNode phi =>
+                    $"phi({string.Join(", ", Enumerable.Range(0, phi.SourcesCount).Select(i => DescribeOperand(phi.GetSource(i), depth + 1)))})",
+                _ => $"{operand.Type}({operand.Value})",
+            };
+
+            return value;
         }
 
         private static uint PackCbSlotAndOffset(int cbSlot, int cbOffset)

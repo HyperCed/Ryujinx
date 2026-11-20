@@ -5,8 +5,10 @@ using Ryujinx.HLE.HOS.Kernel.Process;
 using Ryujinx.Horizon.Common;
 using Ryujinx.HLE.HOS.Kernel.Threading;
 using Ryujinx.HLE.HOS.Services.Nv.NvDrvServices;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 namespace Ryujinx.HLE.HOS.Services.Nx2
 {
@@ -17,7 +19,25 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
     // - 22: a sub-session, served by this same object so its jobs can signal the per-id events.
     class INx2GpuSession : IpcService, INx2StubService
     {
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        private struct SparseMapRequest
+        {
+            public ulong GpuAddress;
+            public ulong Size;
+            public byte NoWrite;
+            public byte Cacheable;
+            public byte Unknown12;
+            public byte Kind;
+            public byte FallbackKind;
+            public byte Unknown15;
+            public ushort Padding16;
+            public uint MemoryHandle;
+            public uint Padding1C;
+            public ulong Offset;
+        }
+
         private const uint NumIds = 32;
+        private const int SparseMapRequestSize = 40;
 
         private readonly object _lock = new();
         private readonly KEvent[] _events = new KEvent[NumIds];
@@ -343,7 +363,7 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
             ulong pages = size / KPageTableBase.PageSize;
 
             // The graphics server's own memory (the system pool), not the application's: the title sizes its
-            // allocations to its pool and fails when that runs short. Contiguous, so it maps in one go.
+            // allocations to its pool and fails when that runs short.
             KernelContext kernel = context.Device.System.KernelContext;
             KMemoryRegionManager pool = kernel.MemoryManager.MemoryRegions[(int)MemoryRegion.Service];
 
@@ -459,17 +479,172 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
 
         [CommandTipc(216)]
         // ExecuteSparseMapRequests: an A buffer of 40-byte SparseMapRequests and a B buffer that gets the
-        // kind applied to each; job slot in data word 6. Replies the number of requests done.
+        // kind applied to each; job slot in raw data word 12. Replies the number of requests done.
         public ResultCode ExecuteSparseMapRequests(ServiceCtx context)
         {
             uint[] w = Nx2Tipc.Words(context);
-            ulong count = context.Request.SendBuff.Count > 0 ? context.Request.SendBuff[0].Size / 40 : 0;
+            ReadOnlySpan<SparseMapRequest> requests = ReadOnlySpan<SparseMapRequest>.Empty;
 
-            Logger.Debug?.Print(LogClass.ServiceNv, $"(STUBBED) nx2:gpu 216 sparse map requests: {count}");
-            EventFor(context, w[6]).WritableEvent.Signal();
-            Nx2Tipc.Reply64(context, count);
+            if (context.Request.SendBuff.Count > 0)
+            {
+                var input = context.Request.SendBuff[0];
+                int requestBytes = (int)(input.Size / SparseMapRequestSize * SparseMapRequestSize);
+
+                if (input.Size % SparseMapRequestSize != 0)
+                {
+                    Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 216 invalid sparse map buffer size {input.Size}");
+                }
+
+                requests = MemoryMarshal.Cast<byte, SparseMapRequest>(context.Memory.GetSpan(input.Position, requestBytes));
+            }
+
+            byte[] kinds = new byte[requests.Length];
+
+            for (int i = 0; i < requests.Length; i++)
+            {
+                SparseMapRequest request = requests[i];
+                kinds[i] = request.Kind;
+                ApplySparseMapRequest(request);
+            }
+
+            if (context.Request.ReceiveBuff.Count > 0 && kinds.Length > 0)
+            {
+                var output = context.Request.ReceiveBuff[0];
+
+                if ((ulong)kinds.Length <= output.Size)
+                {
+                    context.Memory.Write(output.Position, kinds);
+                }
+                else
+                {
+                    Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 216 sparse map output buffer is too small for {requests.Length} requests");
+                }
+            }
+
+            EventFor(context, w[12]).WritableEvent.Signal();
+            Nx2Tipc.Reply64(context, (ulong)requests.Length);
 
             return ResultCode.Success;
+        }
+
+        // RYUJINX_NX2_SPARSE_TRACE=1: logs the sparse map requests (the first 2000).
+        private static readonly bool _sparseTrace = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_SPARSE_TRACE") == "1";
+        private static int _sparseTraces;
+
+        // RYUJINX_NX2_SPARSE_OVERRIDE=1: the game's own mappings replace the memory backing GPU-only regions.
+        private static readonly bool _sparseOverridesBacking = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_SPARSE_OVERRIDE") == "1";
+
+        private void ApplySparseMapRequest(SparseMapRequest request)
+        {
+            if (_sparseTrace && System.Threading.Interlocked.Increment(ref _sparseTraces) <= 2000)
+            {
+                Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 216 map [{request.GpuAddress:x}, +{request.Size:x}] handle {request.MemoryHandle} offset 0x{request.Offset:x} kind 0x{request.Kind:x}");
+            }
+
+            if (request.Size == 0)
+            {
+                return;
+            }
+
+            if (request.Size > ulong.MaxValue - request.GpuAddress)
+            {
+                Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 216 sparse map range [{request.GpuAddress:x}, +{request.Size:x}] wraps the address space");
+                return;
+            }
+
+            ulong pageMask = KPageTableBase.PageSize - 1;
+
+            if (((request.GpuAddress | request.Size) & pageMask) != 0)
+            {
+                Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 216 unaligned sparse map range [{request.GpuAddress:x}, +{request.Size:x}]");
+                return;
+            }
+
+            // Backed regions (GPU-only, and sparse ones holding render targets) keep their backing: remapping the
+            // game's tiles over it invalidated their textures (a 341 MiB virtual texture each) on every request.
+            // RYUJINX_NX2_SPARSE_OVERRIDE=1 applies the game's mappings instead.
+            if (_sparseOverridesBacking && request.MemoryHandle == 0 &&
+                TryGetBackedSparseRegion(request.GpuAddress, out ulong regionStart, out ulong regionCpuAddress, out ulong regionSize))
+            {
+                // Unmapped from a backed sparse region: its own backing again.
+                ulong end = Math.Min(request.GpuAddress + request.Size, regionStart + regionSize);
+
+                Nx2GpuMemoryRegistry.MapAt(request.GpuAddress, regionCpuAddress + (request.GpuAddress - regionStart), end - request.GpuAddress);
+
+                return;
+            }
+
+            if (!_sparseOverridesBacking && OverlapsBackedGpuOnlyRegion(request.GpuAddress, request.Size))
+            {
+                Logger.Debug?.Print(LogClass.ServiceNv, $"nx2:gpu 216 leaves backed GPU-only range [{request.GpuAddress:x}, +{request.Size:x}] unchanged");
+                return;
+            }
+
+            if (request.MemoryHandle == 0)
+            {
+                Nx2GpuMemoryRegistry.Unmap(request.GpuAddress, request.Size);
+                return;
+            }
+
+            lock (_lock)
+            {
+                if (!_memory.TryGetValue(request.MemoryHandle, out (ulong Address, ulong Size) memory) ||
+                    request.Offset > memory.Size ||
+                    request.Size > memory.Size - request.Offset)
+                {
+                    Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gpu 216 invalid map [{request.GpuAddress:x}, +{request.Size:x}] memory {request.MemoryHandle} offset {request.Offset:x}");
+                    return;
+                }
+
+                Nx2GpuMemoryRegistry.MapAt(request.GpuAddress, memory.Address + request.Offset, request.Size);
+            }
+        }
+
+        private bool TryGetBackedSparseRegion(ulong address, out ulong start, out ulong cpuAddress, out ulong size)
+        {
+            lock (_regions)
+            {
+                foreach (ulong regionStart in _sparseRegions)
+                {
+                    (ulong CpuAddress, ulong Size) region = _regions[regionStart];
+
+                    if (address >= regionStart && address - regionStart < region.Size)
+                    {
+                        start = regionStart;
+                        cpuAddress = region.CpuAddress;
+                        size = region.Size;
+
+                        return true;
+                    }
+                }
+            }
+
+            start = cpuAddress = size = 0;
+
+            return false;
+        }
+
+        private bool OverlapsBackedGpuOnlyRegion(ulong address, ulong size)
+        {
+            lock (_regions)
+            {
+                foreach ((ulong start, (ulong CpuAddress, ulong Size) region) in _regions)
+                {
+                    if (address < start)
+                    {
+                        if (start - address < size)
+                        {
+                            return true;
+                        }
+                    }
+                    else if (address - start < region.Size)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
     }
 }

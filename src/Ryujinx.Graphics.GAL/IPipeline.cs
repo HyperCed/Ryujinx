@@ -26,6 +26,7 @@ namespace Ryujinx.Graphics.GAL
         void CopyBuffer(BufferHandle source, BufferHandle destination, int srcOffset, int dstOffset, int size);
 
         void DispatchCompute(int groupsX, int groupsY, int groupsZ);
+        void DispatchComputeIndirect(BufferRange indirectBuffer);
 
         void Draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance);
 

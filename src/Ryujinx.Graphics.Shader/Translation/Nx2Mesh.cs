@@ -38,14 +38,29 @@ namespace Ryujinx.Graphics.Shader.Translation
         /// </summary>
         public byte[] PrimitiveHeader { get; }
 
-        public Nx2MeshState(ShaderStage stage, uint shaderA, uint shaderB, uint initShader, byte[] primitiveHeader)
+        /// <summary>
+        /// Indicates that the host must execute the task/mesh programs as compute shaders.
+        /// </summary>
+        public bool ComputeFallback { get; }
+
+        public Nx2MeshState(
+            ShaderStage stage,
+            uint shaderA,
+            uint shaderB,
+            uint initShader,
+            byte[] primitiveHeader,
+            bool computeFallback = false)
         {
             Stage = stage;
             ShaderA = shaderA;
             ShaderB = shaderB;
             InitShader = initShader;
             PrimitiveHeader = primitiveHeader;
+            ComputeFallback = computeFallback;
         }
+
+        public Nx2MeshState WithComputeFallback(bool computeFallback) =>
+            new(Stage, ShaderA, ShaderB, InitShader, PrimitiveHeader, computeFallback);
 
         public bool IsTaskOrMesh => Stage is ShaderStage.Task or ShaderStage.Mesh;
     }
@@ -68,16 +83,20 @@ namespace Ryujinx.Graphics.Shader.Translation
         public const int PositionW = 31;
         public const int Generic0X = 32;
 
+        public const int PointsTopology = 0;
+        public const int LinesTopology = 1;
         public const int TrianglesTopology = 4;
 
         /// <summary>
         /// Task output region / mesh input region, in 32-bit words.
         /// </summary>
         public int PayloadWords { get; }
+        public ShaderStage Stage { get; }
         public int MaxVertices { get; }
         public int MaxPrimitives { get; }
         public int Topology { get; }
         public int Threads { get; }
+        public bool ComputeFallback { get; }
 
         /// <summary>
         /// OpenGL-style clip space to convert (z = (z + w) / 2), as vertex programs do without depth clip control.
@@ -101,7 +120,22 @@ namespace Ryujinx.Graphics.Shader.Translation
 
         public int AttributeWords => Math.Max(PrimitiveBase + DivCeil(MaxPrimitives, 32) * PrimitiveLines.Length * 32, 1);
 
-        public int MapBytes => 4 + 3 * MaxPrimitives;
+        public int PrimitiveVertices => Topology switch
+        {
+            PointsTopology => 1,
+            LinesTopology => 2,
+            TrianglesTopology => 3,
+            _ => throw new NotSupportedException($"Mesh output topology {Topology}"),
+        };
+
+        /// <summary>
+        /// Words required for one mesh workgroup when its output is stored for a conventional vertex draw.
+        /// </summary>
+        public int EmulationBlockWords =>
+            MaxVertices * VertexLines.Length +
+            MaxPrimitives * (PrimitiveVertices + PrimitiveLines.Length);
+
+        public int MapBytes => 4 + PrimitiveVertices * MaxPrimitives;
 
         /// <summary>
         /// Generic attributes the mesh program writes per primitive (fragment inputs to decorate PerPrimitiveEXT).
@@ -126,6 +160,7 @@ namespace Ryujinx.Graphics.Shader.Translation
 
         public Nx2MeshInfo(ShaderStage stage, Nx2MeshState state, ReadOnlySpan<byte> header)
         {
+            Stage = stage;
             uint lines = Math.Max((state.InitShader >> 12) & 0x1ff, (state.InitShader >> 22) & 0x1ff);
 
             PayloadWords = (int)Math.Max(lines, 1) * 32;
@@ -136,6 +171,7 @@ namespace Ryujinx.Graphics.Shader.Translation
             uint threads = stage == ShaderStage.Task ? state.InitShader & 0x3f : (state.ShaderB >> 20) & 0x3f;
 
             Threads = (int)Math.Max(threads, 1);
+            ComputeFallback = state.ComputeFallback;
 
             if (stage == ShaderStage.Mesh)
             {

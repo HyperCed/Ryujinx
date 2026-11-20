@@ -120,7 +120,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 info.IoDefinitions.Add(new IoDefinition(StorageKind.Input, IoVariable.SubgroupLaneId));
             }
 
-            bool isTaskOrMesh = parameters.Definitions.Stage is ShaderStage.Task or ShaderStage.Mesh;
+            bool isTaskOrMesh = parameters.Definitions.Nx2Mesh != null;
 
             // Known before the declarations: SPIR-V 1.4 declares storage buffers differently.
             context.Nx2UsesMeshShader = isTaskOrMesh ||
@@ -166,9 +166,14 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
             if (context.Nx2UsesMeshShader)
             {
-                // SPV_EXT_mesh_shader needs SPIR-V 1.4 (entry points then list every global, see Generate).
-                context.AddCapability(Capability.MeshShadingEXT);
-                context.AddExtension("SPV_EXT_mesh_shader");
+                if (context.Definitions.Stage != ShaderStage.Compute ||
+                    context.Definitions.Nx2Mesh?.ComputeFallback != true)
+                {
+                    // SPV_EXT_mesh_shader needs SPIR-V 1.4 (entry points then list every global, see Generate).
+                    context.AddCapability(Capability.MeshShadingEXT);
+                    context.AddExtension("SPV_EXT_mesh_shader");
+                }
+
                 context.Version = (1u << 16) | (4u << 8);
             }
 
@@ -185,6 +190,10 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
         private static void Generate(CodeGenContext context, StructuredProgramInfo info, int funcIndex)
         {
+            bool nx2MeshAsCompute =
+                context.Definitions.Stage == ShaderStage.Compute &&
+                context.Definitions.Nx2Mesh?.ComputeFallback == true;
+
             (StructuredFunction function, SpvInstruction spvFunc) = context.GetFunction(funcIndex);
 
             context.CurrentFunction = function;
@@ -226,15 +235,17 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 // From SPIR-V 1.4 on, the interface lists every global variable the entry point uses.
                 SpvInstruction[] mainInterface = context.Nx2UsesMeshShader ? [.. context.GlobalVariables] : context.GetMainInterface();
 
-                context.AddEntryPoint(context.Definitions.Stage.Convert(), spvFunc, "main", mainInterface);
+                context.AddEntryPoint(
+                    nx2MeshAsCompute ? ExecutionModel.GLCompute : context.Definitions.Stage.Convert(),
+                    spvFunc,
+                    "main",
+                    mainInterface);
 
-                if (context.Definitions.Stage is ShaderStage.Task or ShaderStage.Mesh)
+                if (context.Definitions.Nx2Mesh is Nx2MeshInfo mesh)
                 {
-                    Nx2MeshInfo mesh = context.Definitions.Nx2Mesh;
-
                     context.AddExecutionMode(spvFunc, ExecutionMode.LocalSize, (SpvLiteralInteger)mesh.Threads, (SpvLiteralInteger)1, (SpvLiteralInteger)1);
 
-                    if (context.Definitions.Stage == ShaderStage.Mesh)
+                    if (!nx2MeshAsCompute && mesh.Stage == ShaderStage.Mesh)
                     {
                         context.AddExecutionMode(spvFunc, ExecutionMode.OutputVertices, (SpvLiteralInteger)Math.Max(mesh.MaxVertices, 1));
                         context.AddExecutionMode(spvFunc, ExecutionMode.OutputPrimitivesEXT, (SpvLiteralInteger)Math.Max(mesh.MaxPrimitives, 1));

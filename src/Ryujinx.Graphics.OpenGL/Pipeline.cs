@@ -218,6 +218,20 @@ namespace Ryujinx.Graphics.OpenGL
             GL.DispatchCompute(groupsX, groupsY, groupsZ);
         }
 
+        public void DispatchComputeIndirect(BufferRange indirectBuffer)
+        {
+            if (!_program.IsLinked)
+            {
+                Logger.Debug?.Print(LogClass.Gpu, "Dispatch error, shader not linked.");
+                return;
+            }
+
+            PrepareForDispatch();
+
+            GL.BindBuffer((BufferTarget)All.DispatchIndirectBuffer, indirectBuffer.Handle);
+            GL.DispatchComputeIndirect((nint)indirectBuffer.Offset);
+        }
+
         public void Draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance)
         {
             if (!_program.IsLinked)

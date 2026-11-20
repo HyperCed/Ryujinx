@@ -9,9 +9,12 @@ namespace Ryujinx.Graphics.Shader
         public readonly int ReservedTextures { get; }
         public readonly int ReservedImages { get; }
 
-        public ResourceReservationCounts(bool isTransformFeedbackEmulated, bool vertexAsCompute)
+        public ResourceReservationCounts(
+            bool isTransformFeedbackEmulated,
+            bool vertexAsCompute,
+            bool nx2MeshAsCompute = false)
         {
-            ResourceReservations reservations = new(isTransformFeedbackEmulated, vertexAsCompute);
+            ResourceReservations reservations = new(isTransformFeedbackEmulated, vertexAsCompute, nx2MeshAsCompute);
 
             ReservedConstantBuffers = reservations.ReservedConstantBuffers;
             ReservedStorageBuffers = reservations.ReservedStorageBuffers;

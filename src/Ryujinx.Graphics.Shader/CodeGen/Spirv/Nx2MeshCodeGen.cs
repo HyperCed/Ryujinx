@@ -71,7 +71,9 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
         public static Nx2MeshCodeGen Declare(CodeGenContext context)
         {
-            Nx2MeshCodeGen mesh = new(context.Definitions.Nx2Mesh, context.Definitions.Stage == ShaderStage.Task);
+            Nx2MeshCodeGen mesh = new(
+                context.Definitions.Nx2Mesh,
+                context.Definitions.Nx2Mesh.Stage == ShaderStage.Task);
 
             mesh.DeclareVariables(context);
 

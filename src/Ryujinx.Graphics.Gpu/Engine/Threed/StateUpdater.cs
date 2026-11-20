@@ -1566,7 +1566,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             Nx2DumpPrograms(addresses);
             if (GpuContext.Nx2PresentTrace || Nx2PassDumper.Active)
             {
-                GpuContext.Nx2LastProgram = $"VS 0x{addresses.VertexB:X} FS 0x{addresses.Fragment:X}";
+                GpuContext.Nx2LastProgram = $"VS 0x{addresses.VertexB:X} TCS 0x{addresses.TessControl:X} TES 0x{addresses.TessEvaluation:X} GS 0x{addresses.Geometry:X} FS 0x{addresses.Fragment:X}";
             }
 
             lock (_nx2RejectedPrograms)

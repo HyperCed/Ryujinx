@@ -323,6 +323,23 @@ namespace Ryujinx.Graphics.Vulkan
             Gd.Api.CmdDispatchIndirect(CommandBuffer, indirectBuffer.Get(Cbs, indirectBufferOffset, 12).Value, (ulong)indirectBufferOffset);
         }
 
+        public void DispatchComputeIndirect(BufferRange indirectBuffer)
+        {
+            if (!_program.IsLinked)
+            {
+                return;
+            }
+
+            EndRenderPass();
+            RecreateComputePipelineIfNeeded();
+
+            Buffer buffer = Gd.BufferManager
+                .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, 12, false)
+                .Get(Cbs, indirectBuffer.Offset, 12, false).Value;
+
+            Gd.Api.CmdDispatchIndirect(CommandBuffer, buffer, (ulong)indirectBuffer.Offset);
+        }
+
         public void DrawMeshTasks(int groupCountX, int groupCountY, int groupCountZ)
         {
             if (groupCountX == 0 || groupCountY == 0 || groupCountZ == 0 || Gd.MeshShaderApi == null)

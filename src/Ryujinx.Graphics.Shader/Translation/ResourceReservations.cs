@@ -17,6 +17,10 @@ namespace Ryujinx.Graphics.Shader.Translation
         public int VertexOutputStorageBufferBinding { get; }
         public int GeometryVertexOutputStorageBufferBinding { get; }
         public int GeometryIndexOutputStorageBufferBinding { get; }
+        public int Nx2MeshOutputStorageBufferBinding { get; }
+        public int Nx2MeshTaskPayloadStorageBufferBinding { get; }
+        public int Nx2MeshTaskOffsetsStorageBufferBinding { get; }
+        public int Nx2MeshTaskArgsStorageBufferBinding { get; }
         public int IndexBufferTextureBinding { get; }
         public int TopologyRemapBufferTextureBinding { get; }
 
@@ -34,7 +38,10 @@ namespace Ryujinx.Graphics.Shader.Translation
         private readonly Dictionary<IoDefinition, int> _offsets;
         internal IReadOnlyDictionary<IoDefinition, int> Offsets => _offsets;
 
-        internal ResourceReservations(bool isTransformFeedbackEmulated, bool vertexAsCompute)
+        internal ResourceReservations(
+            bool isTransformFeedbackEmulated,
+            bool vertexAsCompute,
+            bool nx2MeshAsCompute = false)
         {
             // All stages reserves the first constant buffer binding for the support buffer.
             ReservedConstantBuffers = 1;
@@ -69,14 +76,23 @@ namespace Ryujinx.Graphics.Shader.Translation
                 _vertexBufferTextureBaseBinding = ReservedTextures + 2;
                 ReservedTextures += 2 + MaxVertexBufferTextures;
             }
+
+            if (nx2MeshAsCompute)
+            {
+                Nx2MeshOutputStorageBufferBinding = ReservedStorageBuffers++;
+                Nx2MeshTaskPayloadStorageBufferBinding = ReservedStorageBuffers++;
+                Nx2MeshTaskOffsetsStorageBufferBinding = ReservedStorageBuffers++;
+                Nx2MeshTaskArgsStorageBufferBinding = ReservedStorageBuffers++;
+            }
         }
 
         internal ResourceReservations(
             IGpuAccessor gpuAccessor,
             bool isTransformFeedbackEmulated,
             bool vertexAsCompute,
+            bool nx2MeshAsCompute,
             IoUsage? vacInput,
-            IoUsage vacOutput) : this(isTransformFeedbackEmulated, vertexAsCompute)
+            IoUsage vacOutput) : this(isTransformFeedbackEmulated, vertexAsCompute, nx2MeshAsCompute)
         {
             if (vertexAsCompute)
             {

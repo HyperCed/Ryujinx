@@ -443,6 +443,7 @@ namespace Ryujinx.Graphics.Vulkan
                 }
 
                 primitiveRestartEnable &= topologySupportsRestart;
+                primitiveRestartEnable |= isMoltenVk;
 
                 PipelineInputAssemblyStateCreateInfo inputAssemblyState = new()
                 {

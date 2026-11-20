@@ -19,6 +19,23 @@
     </ItemGroup>
   </Target>
 
+  <!-- Set MoltenVKOverridePath to use a local mesh-enabled build without replacing the NuGet package. -->
+  <Target Name="CopyMoltenVKOverride" AfterTargets="Build" Condition="'$(MoltenVKOverridePath)' != ''">
+    <Error Condition="!$([MSBuild]::IsOSPlatform('OSX'))" Text="MoltenVKOverridePath can only be used on macOS." />
+    <Error Condition="!Exists('$(MoltenVKOverridePath)')" Text="MoltenVKOverridePath does not exist: $(MoltenVKOverridePath)" />
+    <Copy SourceFiles="$(MoltenVKOverridePath)" DestinationFiles="$(TargetDir)libMoltenVK.dylib" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MoltenVKOverridePath)" DestinationFiles="$(TargetDir)runtimes/osx-arm64/native/libMoltenVK.dylib" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MoltenVKOverridePath)" DestinationFiles="$(TargetDir)runtimes/osx-x64/native/libMoltenVK.dylib" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyMoltenVKOverrideForPublish" AfterTargets="Publish" Condition="'$(MoltenVKOverridePath)' != ''">
+    <Error Condition="!$([MSBuild]::IsOSPlatform('OSX'))" Text="MoltenVKOverridePath can only be used on macOS." />
+    <Error Condition="!Exists('$(MoltenVKOverridePath)')" Text="MoltenVKOverridePath does not exist: $(MoltenVKOverridePath)" />
+    <Copy SourceFiles="$(MoltenVKOverridePath)" DestinationFiles="$(PublishDir)libMoltenVK.dylib" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MoltenVKOverridePath)" DestinationFiles="$(PublishDir)runtimes/osx-arm64/native/libMoltenVK.dylib" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MoltenVKOverridePath)" DestinationFiles="$(PublishDir)runtimes/osx-x64/native/libMoltenVK.dylib" SkipUnchangedFiles="true" />
+  </Target>
+
   <Target Name="BuildValidationProj" BeforeTargets="BeforeRebuild">
     <MSBuild Projects="..\Ryujinx.BuildValidationTasks\Ryujinx.BuildValidationTasks.csproj" Targets="Rebuild">
     </MSBuild>

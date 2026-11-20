@@ -303,6 +303,15 @@ namespace Ryujinx.Graphics.Shader
         }
 
         /// <summary>
+        /// Queries host support for storage image writes without a format qualifier.
+        /// </summary>
+        /// <returns>True if storage image writes without a format are supported</returns>
+        bool QueryHostSupportsImageStoreWithoutFormat()
+        {
+            return false;
+        }
+
+        /// <summary>
         /// Queries host support for writes to the layer from vertex or tessellation shader stages.
         /// </summary>
         /// <returns>True if writes to the layer from vertex or tessellation are supported, false otherwise</returns>

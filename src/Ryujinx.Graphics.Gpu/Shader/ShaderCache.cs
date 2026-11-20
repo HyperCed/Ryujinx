@@ -431,12 +431,19 @@ namespace Ryujinx.Graphics.Gpu.Shader
             bool geometryHasStore = hasGeometryShader && translatorContexts[4].HasStore;
             bool vertexToCompute = nx2Mesh == null && ShouldConvertVertexToCompute(_context, vertexHasStore, geometryHasStore, hasGeometryShader);
             bool geometryToCompute = nx2Mesh == null && ShouldConvertGeometryToCompute(_context, geometryHasStore);
+            bool nx2MeshAsCompute = nx2Mesh != null &&
+                _context.Capabilities.Api == TargetApi.Vulkan &&
+                !_context.Capabilities.SupportsMeshShaders;
 
             CachedShaderStage[] shaders = new CachedShaderStage[Constants.ShaderStages + 1];
             List<ShaderSource> shaderSources = new();
 
             TranslatorContext previousStage = null;
-            ShaderInfoBuilder infoBuilder = new(_context, transformFeedbackDescriptors != null, vertexToCompute);
+            ShaderInfoBuilder infoBuilder = new(
+                _context,
+                transformFeedbackDescriptors != null,
+                vertexToCompute,
+                nx2MeshAsCompute);
 
             if (geometryToCompute && translatorContexts[4] != null)
             {
@@ -452,7 +459,10 @@ namespace Ryujinx.Graphics.Gpu.Shader
 
                 if (currentStage != null)
                 {
-                    gpuAccessors[stageIndex].InitializeReservedCounts(transformFeedbackDescriptors != null, vertexToCompute);
+                    gpuAccessors[stageIndex].InitializeReservedCounts(
+                        transformFeedbackDescriptors != null,
+                        vertexToCompute,
+                        nx2MeshAsCompute && stageIndex is 0 or 2);
 
                     ShaderProgram program;
 
@@ -522,14 +532,32 @@ namespace Ryujinx.Graphics.Gpu.Shader
 
             ShaderSource[] shaderSourcesArray = shaderSources.ToArray();
 
-            if (nx2Mesh != null && _nx2MeshSpirvDump != null)
+            if (nx2Programs != null && nx2Mesh == null && _nx2SpirvDump != null)
+            {
+                // RYUJINX_NX2_SPV_DUMP=<dir>: dump translated SPIR-V for regular NX2 graphics pipelines.
+                System.IO.Directory.CreateDirectory(_nx2SpirvDump);
+
+                foreach (ShaderSource source in shaderSourcesArray)
+                {
+                    if (source.BinaryCode != null)
+                    {
+                        string name = $"{addresses.VertexA:x}_{addresses.VertexB:x}_{addresses.TessControl:x}_{addresses.TessEvaluation:x}_{addresses.Geometry:x}_{addresses.Fragment:x}.{source.Stage}.spv";
+
+                        System.IO.File.WriteAllBytes(System.IO.Path.Combine(_nx2SpirvDump, name), source.BinaryCode);
+                    }
+                }
+            }
+
+            bool dumpProgram = _nx2SpirvDumpProgram != 0 && addresses.AsSpan().Contains(_nx2SpirvDumpProgram);
+
+            if ((nx2Mesh != null || dumpProgram) && _nx2MeshSpirvDump != null)
             {
                 // RYUJINX_NX2_MESH_SPV_DUMP=<dir>: the SPIR-V of task/mesh pipelines, for spirv-val.
                 System.IO.Directory.CreateDirectory(_nx2MeshSpirvDump);
 
                 foreach (ShaderSource source in shaderSourcesArray)
                 {
-                    string name = $"{addresses.VertexB:x}_{addresses.TessEvaluation:x}_{nx2Mesh.Key:x}.{source.Stage}.spv";
+                    string name = $"{addresses.VertexB:x}_{addresses.TessEvaluation:x}_{addresses.Fragment:x}_{nx2Mesh?.Key ?? 0:x}.{source.Stage}.spv";
 
                     System.IO.File.WriteAllBytes(System.IO.Path.Combine(_nx2MeshSpirvDump, name), source.BinaryCode);
                 }
@@ -568,6 +596,10 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// </summary>
         /// <exception cref="Nx2.Nx2ShaderException">A program cannot be lowered</exception>
         private static readonly string _nx2MeshSpirvDump = Environment.GetEnvironmentVariable("RYUJINX_NX2_MESH_SPV_DUMP");
+
+        // RYUJINX_NX2_SPV_DUMP_PROGRAM=<hex address>: also dump (into RYUJINX_NX2_MESH_SPV_DUMP) the pipelines with that program.
+        private static readonly ulong _nx2SpirvDumpProgram = Convert.ToUInt64(Environment.GetEnvironmentVariable("RYUJINX_NX2_SPV_DUMP_PROGRAM") ?? "0", 16);
+        private static readonly string _nx2SpirvDump = Environment.GetEnvironmentVariable("RYUJINX_NX2_SPV_DUMP");
 
         private static readonly bool _nx2NoTessellation = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_TESSELLATION") == "1";
 
