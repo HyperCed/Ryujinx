@@ -385,6 +385,53 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="cachedSamplerBuffer">The currently cached sampler buffer data</param>
         /// <param name="textureBufferIndex">The new texture buffer index</param>
         /// <param name="samplerBufferIndex">The new sampler buffer index</param>
+        /// <summary>
+        /// Saves the textures a graphics stage samples (Nx2PassDumper).
+        /// </summary>
+        public void Nx2DumpSampledTextures(int stageIndex, string what)
+        {
+            Nx2PassDumper.Note($"stage {stageIndex}: {(stageIndex < _textureBindings.Length ? _textureBindings[stageIndex].Length : -1)} texture bindings");
+
+            if (!Nx2PassDumper.Active || stageIndex >= _textureBindings.Length)
+            {
+                return;
+            }
+
+            if (_textureBindings[stageIndex].Length != 0)
+            {
+                Nx2PassDumper.Dump(null, $"{what}_s{stageIndex}_bindings{_textureBindings[stageIndex].Length}_images{_imageBindings[stageIndex].Length}");
+            }
+
+            foreach (TextureBindingInfo bindingInfo in _textureBindings[stageIndex])
+            {
+                if (bindingInfo.Binding < _textureState.Length)
+                {
+                    Texture texture = _textureState[bindingInfo.Binding].CachedTexture;
+
+                    Nx2PassDumper.Dump(texture, $"{what}_s{stageIndex}_b{bindingInfo.Binding}_h{bindingInfo.Handle:x}", texture == null ? "null" : $"{texture.Target} {texture.Info.DepthOrLayers} layers");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Saves the images the bound compute program stores to (Nx2PassDumper).
+        /// </summary>
+        public void Nx2DumpStoredImages(string what)
+        {
+            if (!Nx2PassDumper.Active || _imageBindings.Length == 0)
+            {
+                return;
+            }
+
+            foreach (TextureBindingInfo bindingInfo in _imageBindings[0])
+            {
+                if ((bindingInfo.Flags & TextureUsageFlags.ImageStore) != 0 && bindingInfo.Binding < _imageState.Length)
+                {
+                    Nx2PassDumper.Dump(_imageState[bindingInfo.Binding].CachedTexture, $"{what}_img{bindingInfo.Binding}");
+                }
+            }
+        }
+
         // RYUJINX_NX2_TEXBIND_TRACE=1: logs Switch 2 texture bindings bound null or with another target.
         private static readonly bool _nx2BindTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_TEXBIND_TRACE") == "1";
         private static int _nx2BindTraces;

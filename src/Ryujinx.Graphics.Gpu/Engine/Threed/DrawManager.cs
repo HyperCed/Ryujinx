@@ -27,6 +27,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         private bool _topologySet;
 
         private bool _instancedDrawPending;
+
+        /// <summary>
+        /// An instanced draw is deferred, waiting for its last instance.
+        /// </summary>
+        public bool HasPendingInstancedDraw => _instancedDrawPending;
         private bool _instancedIndexed;
         private bool _instancedIndexedInline;
 
@@ -603,6 +608,32 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// <param name="firstVertex">First vertex on the vertex buffer</param>
         /// <param name="firstInstance">First instance</param>
         /// <param name="indexed">True if the draw is indexed, false otherwise</param>
+        private string Nx2DescribeIndices(ThreedClass engine, int firstIndex, int count)
+        {
+            ulong address = (ulong)engine.Read(0x17c8) << 32 | (uint)engine.Read(0x17cc);
+            int type = engine.Read(0x17d8);
+            int size = type == 0 ? 1 : type == 1 ? 2 : 4;
+            ulong start = address + (ulong)(firstIndex * size);
+
+            if (!_channel.MemoryManager.IsMapped(start))
+            {
+                return $"unmapped 0x{start:X} (type {type})";
+            }
+
+            ReadOnlySpan<byte> data = _channel.MemoryManager.GetSpan(start, count * size);
+            uint min = uint.MaxValue, max = 0;
+
+            for (int i = 0; i < count; i++)
+            {
+                uint value = size == 1 ? data[i] : size == 2 ? System.BitConverter.ToUInt16(data[(i * 2)..]) : System.BitConverter.ToUInt32(data[(i * 4)..]);
+
+                min = Math.Min(min, value);
+                max = Math.Max(max, value);
+            }
+
+            return $"0x{start:X} type {type} count {count} min {min} max {max}";
+        }
+
         private void DrawImpl(
             ThreedClass engine,
             int count,
@@ -612,6 +643,25 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             int firstInstance,
             bool indexed)
         {
+            if (Nx2PassDumper.Active)
+            {
+                GpuContext.Nx2LastDrawProgram = GpuContext.Nx2LastProgram;
+
+                Nx2PassDumper.Note($"draw {count} x{instanceCount} indexed {indexed} mesh {_drawState.Nx2MeshDraw} [{GpuContext.Nx2LastProgram}]");
+
+                if (Nx2PassDumper.IsTargetProgram(GpuContext.Nx2LastProgram))
+                {
+                    Nx2PassDumper.Note($"vertex input:{engine.Nx2DescribeVertexInput()} first index {firstIndex} first vertex {firstVertex} first instance {firstInstance}");
+
+                    if (indexed)
+                    {
+                        Nx2PassDumper.Note($"indices: {Nx2DescribeIndices(engine, firstIndex, count)}");
+                    }
+
+                    _channel.TextureManager.Nx2DumpGraphicsSamples("input");
+                }
+            }
+
             if (instanceCount > 1)
             {
                 _channel.BufferManager.SetInstancedDrawVertexCount(count);

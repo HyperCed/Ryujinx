@@ -62,6 +62,24 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// Sets the texture and image bindings for the compute pipeline.
         /// </summary>
         /// <param name="bindings">Bindings for the active shader</param>
+        /// <summary>
+        /// Saves the images the bound compute program stores to (Nx2PassDumper).
+        /// </summary>
+        public void Nx2DumpComputeStores(string what) => _cpBindingsManager.Nx2DumpStoredImages(what);
+
+        /// <summary>
+        /// Saves the textures the bound graphics stages sample (Nx2PassDumper).
+        /// </summary>
+        public void Nx2DumpGraphicsSamples(string what)
+        {
+            Nx2PassDumper.Note($"sampled textures of the draw ({what})");
+
+            for (int stage = 0; stage < Constants.ShaderStages; stage++)
+            {
+                _gpBindingsManager.Nx2DumpSampledTextures(stage, what);
+            }
+        }
+
         public void SetComputeBindings(CachedShaderBindings bindings)
         {
             _cpBindingsManager.SetBindings(bindings);
@@ -159,6 +177,11 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             if (_rtColors[index] != color)
             {
+                if (Nx2PassDumper.Active && _rtColors[index] != null)
+                {
+                    Nx2PassDumper.Dump(_rtColors[index], $"rt{index}", GpuContext.Nx2LastDrawProgram);
+                }
+
                 if (_rtColorsBound[index])
                 {
                     _rtColors[index]?.SignalModifying(false);

@@ -686,6 +686,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             try
             {
                 GpuContext.Nx2Phase = $"Maxwell 3D method 0x{method:x} = 0x{value:x}";
+                _3dClass.Nx2FlushDeferredDrawBeforeWrite((int)method * 4, (int)value);
                 _3dClass.Write((int)method * 4, (int)value);
                 GpuContext.Nx2Phase = "processing";
             }

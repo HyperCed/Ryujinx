@@ -138,6 +138,8 @@ namespace Ryujinx.Graphics.Gpu
             Action<object> releaseCallback,
             object userObj)
         {
+            Nx2PassDumper.OnPresent();
+
             if (!_context.PhysicalMemoryRegistry.TryGetValue(pid, out PhysicalMemory physicalMemory))
             {
                 return false;

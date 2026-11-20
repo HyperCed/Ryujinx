@@ -293,6 +293,11 @@ namespace Ryujinx.Graphics.Gpu
         internal static string Nx2LastProgram;
 
         /// <summary>
+        /// The program of the last draw (Nx2PassDumper names render targets after it).
+        /// </summary>
+        internal static string Nx2LastDrawProgram;
+
+        /// <summary>
         /// RYUJINX_PRESENT_TRACE=1: logs Switch 2 render targets, draws into presented images and the
         /// content of presented images (sampled), to find out why a frame shows nothing.
         /// </summary>

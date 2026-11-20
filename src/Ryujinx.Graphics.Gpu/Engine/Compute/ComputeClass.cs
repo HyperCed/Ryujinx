@@ -351,6 +351,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
 
             _context.Renderer.Pipeline.DispatchCompute(gridX, gridY, gridZ);
 
+            if (Nx2PassDumper.Active)
+            {
+                _channel.TextureManager.Nx2DumpComputeStores($"cs{shaderGpuVa:x}_{gridX}x{gridY}x{gridZ}");
+            }
+
             _3dEngine.ForceShaderUpdate();
 
             return true;
