@@ -317,7 +317,7 @@ namespace Ryujinx.Graphics.Gpu
         /// </summary>
         internal static void Nx2TraceStorageBuffer(string stage, int cbSlot, int cbOffset, Memory.MemoryManager memoryManager, ulong descriptorAddress, ulong address, int size, uint boundSize)
         {
-            if (!_nx2StorageTrace || _nx2StorageTraced.Count > 400 || !_nx2StorageTraced.TryAdd((stage.GetHashCode(), cbSlot, cbOffset, address), 0))
+            if (!_nx2StorageTrace || _nx2StorageTraced.Count > 20000 || !_nx2StorageTraced.TryAdd((stage.GetHashCode(), cbSlot, cbOffset, address), 0))
             {
                 return;
             }
@@ -775,6 +775,43 @@ namespace Ryujinx.Graphics.Gpu
         /// If no actions are present, a host sync object is not created.
         /// </summary>
         /// <param name="flags">Modifiers for how host sync should be created</param>
+        /// <summary>
+        /// RYUJINX_NX2_FLUSH_TRACE=1: counts host syncs (which arm the read traps of GPU-written buffers) and
+        /// the flushes of GPU-written buffer data the guest CPU's reads trigger.
+        /// </summary>
+        internal static readonly bool Nx2FlushTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_FLUSH_TRACE") == "1";
+        private static int _nx2SyncsCreated;
+        internal static int Nx2ExternalFlushes;
+
+        internal static void Nx2CountFlushEvent(ref int counter, string what)
+        {
+            int count = Interlocked.Increment(ref counter);
+
+            if (count <= 20 || (count & (count - 1)) == 0)
+            {
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 flush trace #{count}: {what}");
+            }
+        }
+
+        private static readonly bool _nx2ReleaseSync = Environment.GetEnvironmentVariable("RYUJINX_NX2_RELEASE_SYNC") != "0";
+
+        /// <summary>
+        /// Switch 2 fences are semaphore releases, not syncpoint increments: creates the host sync a syncpoint
+        /// increment does, before the release becomes visible, so the guest CPU's reads of buffers the GPU
+        /// wrote before it trap and flush (the read traps are armed when a sync is created). Without it the
+        /// game reads compute results back as stale memory (title sky lighting: 0/0 = NaN spherical harmonics).
+        /// RYUJINX_NX2_RELEASE_SYNC=0 turns it off.
+        /// </summary>
+        internal void Nx2SyncBeforeRelease(Image.TextureManager textureManager)
+        {
+            if (_nx2ReleaseSync)
+            {
+                // As a syncpoint increment: render targets drawn so far become flushable textures.
+                textureManager.RefreshModifiedTextures();
+                CreateHostSyncIfNeeded(HostSyncFlags.StrictSyncpoint);
+            }
+        }
+
         internal void CreateHostSyncIfNeeded(HostSyncFlags flags)
         {
             bool syncPoint = (flags & HostSyncFlags.Syncpoint) == HostSyncFlags.Syncpoint;
@@ -816,6 +853,11 @@ namespace Ryujinx.Graphics.Gpu
                 Renderer.CreateSync(SyncNumber, strict);
 
                 SyncNumber++;
+
+                if (Nx2FlushTrace)
+                {
+                    Nx2CountFlushEvent(ref _nx2SyncsCreated, $"host sync {SyncNumber} ({flags}, {SyncActions.Count} actions)");
+                }
 
                 for (int i = 0; i < SyncActions.Count; i++)
                 {

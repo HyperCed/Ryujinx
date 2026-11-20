@@ -259,6 +259,11 @@ namespace Ryujinx.Cpu.AppleHv
             switch (ec)
             {
                 case ExceptionClass.DataAbortLowerEl:
+                    if (_watchStart != _watchEnd)
+                    {
+                        WatchAccess(memoryManager, vcpuHandle, elr, (uint)esr);
+                    }
+
                     DataAbort(memoryManager.Tracking, vcpuHandle, (uint)esr);
                     break;
 
@@ -302,6 +307,68 @@ namespace Ryujinx.Cpu.AppleHv
                 return HvAddressSpace.KernelRegionTlbiEretAddress;
 
             return HvAddressSpace.KernelRegionEretAddress;
+        }
+
+        // RYUJINX_HV_WATCH=<hex start>-<hex end>: logs the guest code (PC, LR, stored register) behind tracked
+        // accesses that fault in that virtual range, and saves the code around each PC as
+        // RYUJINX_HV_WATCH_DIR/pc_<address>.bin (finds which game function writes some GPU data).
+        private static readonly (ulong, ulong) _watchRange = ParseWatchRange(Environment.GetEnvironmentVariable("RYUJINX_HV_WATCH"));
+        private static readonly ulong _watchStart = _watchRange.Item1;
+        private static readonly ulong _watchEnd = _watchRange.Item2;
+        private static readonly string _watchDirectory = Environment.GetEnvironmentVariable("RYUJINX_HV_WATCH_DIR");
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, int> _watchedPcs = new();
+
+        private static (ulong, ulong) ParseWatchRange(string value)
+        {
+            string[] parts = value?.Split('-');
+
+            return parts?.Length == 2 ? (Convert.ToUInt64(parts[0], 16), Convert.ToUInt64(parts[1], 16)) : (0, 0);
+        }
+
+        private static void WatchAccess(HvMemoryManager memoryManager, ulong vcpu, ulong elr, uint esr)
+        {
+            HvApi.hv_vcpu_get_sys_reg(vcpu, HvSysReg.FAR_EL1, out ulong far);
+
+            if (far < _watchStart || far >= _watchEnd)
+            {
+                return;
+            }
+
+            int hits = _watchedPcs.AddOrUpdate(elr, 1, (_, count) => count + 1);
+
+            if (hits > 3)
+            {
+                return;
+            }
+
+            HvApi.hv_vcpu_get_reg(vcpu, HvReg.X30, out ulong lr);
+            bool write = (esr & (1u << 6)) != 0;
+            bool isv = (esr & (1u << 24)) != 0;
+            uint rt = (esr >> 16) & 0x1f;
+            ulong value = 0;
+
+            if (isv && rt < 31)
+            {
+                HvApi.hv_vcpu_get_reg(vcpu, HvReg.X0 + rt, out value);
+            }
+
+            Logger.Info?.Print(LogClass.Cpu, $"HV watch: {(write ? "write" : "read")} at 0x{far:X} by PC 0x{elr:X} (LR 0x{lr:X}){(isv ? $" x{rt} = 0x{value:X}" : "")}");
+
+            if (hits == 1 && _watchDirectory != null)
+            {
+                try
+                {
+                    ulong start = elr - 0x800;
+                    byte[] code = new byte[0x1000];
+
+                    memoryManager.Read(start, code);
+                    System.IO.File.WriteAllBytes(System.IO.Path.Combine(_watchDirectory, $"pc_{elr:x}_from_{start:x}.bin"), code);
+                }
+                catch (Exception exception)
+                {
+                    Logger.Info?.Print(LogClass.Cpu, $"HV watch: code at 0x{elr:X} unreadable: {exception.Message}");
+                }
+            }
         }
 
         private static void DataAbort(MemoryTracking tracking, ulong vcpu, uint esr)

@@ -127,6 +127,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 }
             }
 
+            if (_context.Nx2Ampere && operation is SemaphoredOperation.Release or SemaphoredOperation.Reduction)
+            {
+                _context.Nx2SyncBeforeRelease(_parent.TextureManager);
+            }
+
             if (_state.State.SemaphoredReleaseSize == SemaphoredReleaseSize.SixteenBytes)
             {
                 _parent.MemoryManager.Write(address + 4, 0);

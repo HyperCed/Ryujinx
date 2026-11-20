@@ -3850,7 +3850,10 @@ public static partial class Nx2Lowering
             call_targets.Add(U32(target / 16));
             call_links.Add(link);
             relocations.Add(new Relocation(U32(result.Instructions.Size()), target / 16, true));
-            emit(0xe26000000007000fUL);
+            // Maxwell CAL has no guard predicate (the field is 0, as the NVIDIA compiler encodes it): with
+            // PT there, Ryujinx's decoder takes the call for an unconditional jump and never decodes what
+            // follows the return (a sqrt slow path then fell into the fast path: rsqrt(0) * 0 = NaN).
+            emit(0xe26000000000000fUL);
             break;
         }
         case 0x950: { // Verified RET.REL.NODEC epilogue restoring the call link

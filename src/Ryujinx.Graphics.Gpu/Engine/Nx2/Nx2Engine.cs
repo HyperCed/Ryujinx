@@ -212,6 +212,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                         combine = current => System.Math.Max(current, released);
                     }
 
+                    _context.Nx2SyncBeforeRelease(_channel.TextureManager);
+
                     uint before = memory.Read<uint>(address, tracked: true);
 
                     if (combine != null)
@@ -274,6 +276,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
         // SET_REPORT_SEMAPHORE_A-D (0x6c0-0x6c3): address high/low, payload, then operation in bits 1:0
         // (release / acquire / report only / trap), reduction enable in bit 3 with the operation in bits
         // 11:9, and a one-word (no timestamp) structure in bit 28. NVN2 releases its queue syncs this way.
+        private static readonly System.Collections.Generic.HashSet<(string, uint)> _reportTypesSeen = [];
+
         private void ReportSemaphore(uint control)
         {
             ulong address = ((ulong)(Registers[ReportSemaphoreA] & 0x1ffffff) << 32) | Registers[ReportSemaphoreA + 1];
@@ -289,11 +293,23 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
 
             if (operation == 2)
             {
-                // A counter report: no counter is kept yet.
-                payload = 0;
+                uint type = (control >> 23) & 0x1f;
+
+                // A counter report. Type 0 reports the payload (with a timestamp); no other counter is kept yet.
+                if (type != 0)
+                {
+                    payload = 0;
+                }
+
+                if (_reportTypesSeen.Add((_name, type)))
+                {
+                    Logger.Info?.Print(LogClass.Gpu, $"Switch 2 {_name} counter report type 0x{type:x} (control 0x{control:x}) at 0x{address:X}");
+                }
             }
             System.Func<uint, uint> combine = null;
             uint before = 0;
+
+            _context.Nx2SyncBeforeRelease(_channel.TextureManager);
 
             if (operation != 2 && ((control >> 3) & 1) != 0)
             {

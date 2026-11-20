@@ -68,6 +68,20 @@ namespace Ryujinx.Graphics.Gpu.Image
         public void Nx2DumpComputeStores(string what) => _cpBindingsManager.Nx2DumpStoredImages(what);
 
         /// <summary>
+        /// Saves the render target RYUJINX_NX2_PASS_DUMP_RT names after a draw into it (Nx2PassDumper).
+        /// </summary>
+        public void Nx2DumpRenderTargetAfterDraw(string program)
+        {
+            for (int index = 0; index < _rtColors.Length; index++)
+            {
+                if (_rtColors[index]?.Info.GpuAddress == Nx2PassDumper.TargetRenderTarget)
+                {
+                    Nx2PassDumper.Dump(_rtColors[index], $"afterdraw_rt{index}", program);
+                }
+            }
+        }
+
+        /// <summary>
         /// Saves the textures the bound graphics stages sample (Nx2PassDumper).
         /// </summary>
         public void Nx2DumpGraphicsSamples(string what)

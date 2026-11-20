@@ -34,6 +34,20 @@ namespace Ryujinx.Graphics.Gpu
         private static readonly string _targetProgram = Environment.GetEnvironmentVariable("RYUJINX_NX2_PASS_DUMP_PROGRAM")?.ToUpperInvariant();
         private static int _targetDraws;
 
+        // RYUJINX_NX2_PASS_DUMP_RT=<hex GPU address>: save that render target after every draw into it.
+        public static readonly ulong TargetRenderTarget = ulong.TryParse(Environment.GetEnvironmentVariable("RYUJINX_NX2_PASS_DUMP_RT"), System.Globalization.NumberStyles.HexNumber, null, out ulong rt) ? rt : 0;
+
+        /// <summary>
+        /// Saves raw bytes next to the passes (constant buffers of a traced draw).
+        /// </summary>
+        public static void WriteRaw(string name, ReadOnlySpan<byte> data)
+        {
+            if (Active)
+            {
+                File.WriteAllBytes(Path.Combine(_directory, name), data.ToArray());
+            }
+        }
+
         public static void Note(string text)
         {
             if (Active)

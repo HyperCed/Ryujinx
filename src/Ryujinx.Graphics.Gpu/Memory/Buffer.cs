@@ -758,8 +758,47 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// </summary>
         /// <param name="address">Address of the memory action</param>
         /// <param name="size">Size in bytes</param>
+        private static int _nx2NaNReports;
+
+        // RYUJINX_NX2_FLUSH_TRACE=1: GPU-written data the guest CPU reads back that holds NaNs.
+        private void Nx2ReportNaN(ulong address, ulong size)
+        {
+            ulong start = Math.Max(address, Address);
+            ulong end = Math.Min(address + size, EndAddress);
+
+            if (start >= end || _nx2NaNReports >= 80)
+            {
+                return;
+            }
+
+            ReadOnlySpan<uint> words = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, uint>(_physicalMemory.GetSpan(start, (int)(end - start)));
+            int nan = 0, first = -1;
+
+            for (int i = 0; i < words.Length; i++)
+            {
+                uint word = words[i];
+
+                if ((word & 0x7f800000) == 0x7f800000 && (word & 0x7fffff) != 0 && (word == 0x7fc00000 || word == 0xffc00000 || word == 0x7fffffff))
+                {
+                    nan++;
+                    first = first < 0 ? i : first;
+                }
+            }
+
+            if (nan != 0)
+            {
+                _nx2NaNReports++;
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 flush trace: buffer 0x{Address:X}+0x{Size:x} read back with {nan} NaN words in 0x{start:X}+0x{end - start:x}, first at 0x{start + (ulong)first * 4:X}");
+            }
+        }
+
         public void ExternalFlush(ulong address, ulong size)
         {
+            if (GpuContext.Nx2FlushTrace)
+            {
+                GpuContext.Nx2CountFlushEvent(ref GpuContext.Nx2ExternalFlushes, $"CPU access flushes buffer 0x{Address:X}+0x{Size:x} at 0x{address:X}+0x{size:x}");
+            }
+
             _context.Renderer.BackgroundContextAction(() =>
             {
                 BufferModifiedRangeList ranges = _modifiedRanges;
@@ -768,6 +807,11 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 {
                     (address, size) = PageAlign(address, size);
                     ranges.WaitForAndFlushRanges(address, size);
+
+                    if (GpuContext.Nx2FlushTrace)
+                    {
+                        Nx2ReportNaN(address, size);
+                    }
                 }
             }, true);
         }

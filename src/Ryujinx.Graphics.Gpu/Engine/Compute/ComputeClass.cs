@@ -339,7 +339,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Compute
                 SbDescriptor sbDescriptor = _channel.MemoryManager.Physical.Read<SbDescriptor>(sbDescAddress);
                 uint size = GpuContext.Nx2StorageBufferSize(_channel.MemoryManager, sbDescriptor, compute: true, written: sb.Flags.HasFlag(BufferUsageFlags.Write));
 
-                GpuContext.Nx2TraceStorageBuffer("compute", sb.SbCbSlot, sb.SbCbOffset, _channel.MemoryManager, sbDescAddress, sbDescriptor.PackAddress(), sbDescriptor.Size, size);
+                GpuContext.Nx2TraceStorageBuffer($"compute 0x{shaderGpuVa:X} {(sb.Flags.HasFlag(BufferUsageFlags.Write) ? "written" : "read")}", sb.SbCbSlot, sb.SbCbOffset, _channel.MemoryManager, sbDescAddress, sbDescriptor.PackAddress(), sbDescriptor.Size, size);
 
                 _channel.BufferManager.SetComputeStorageBuffer(sb.Slot, sbDescriptor.PackAddress(), size, sb.Flags);
             }

@@ -542,6 +542,114 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 new Extents2DF(dstX0, dstY0, dstX1, dstY1));
         }
 
+        private int _nx2UniformDumps;
+
+        private void Nx2DescribeUniformBuffers(int instanceCount)
+        {
+            int dump = _nx2UniformDumps++;
+
+            for (int stage = 0; stage < Constants.ShaderStages; stage++)
+            {
+                for (int slot = 0; slot < Constants.TotalGpUniformBuffers; slot++)
+                {
+                    int size = _channel.BufferManager.GetGraphicsUniformBufferSize(stage, slot);
+                    ulong address = _channel.BufferManager.GetGraphicsUniformBufferAddress(stage, slot);
+
+                    if (size <= 0 || address == MemoryManager.PteUnmapped)
+                    {
+                        continue;
+                    }
+
+                    ReadOnlySpan<byte> data = _channel.MemoryManager.Physical.GetSpan(address, size);
+                    ReadOnlySpan<float> floats = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(data);
+                    int nan = 0, inf = 0, zero = 0, lastNonZero = -1;
+                    float min = float.MaxValue, max = float.MinValue;
+
+                    for (int i = 0; i < floats.Length; i++)
+                    {
+                        float value = floats[i];
+
+                        if (float.IsNaN(value)) { nan++; }
+                        else if (float.IsInfinity(value)) { inf++; }
+                        else
+                        {
+                            if (value == 0) { zero++; } else { lastNonZero = i; }
+
+                            min = Math.Min(min, value);
+                            max = Math.Max(max, value);
+                        }
+                    }
+
+                    Nx2PassDumper.Note($"cbuf stage {stage} c{slot}: phys 0x{address:X} size 0x{size:x}, {floats.Length} words: NaN {nan} Inf {inf} zero {zero}, last non-zero word {lastNonZero}, min {min:G4} max {max:G4} (instances {instanceCount})");
+                    Nx2PassDumper.WriteRaw($"draw{dump}_s{stage}_c{slot}.bin", data);
+                }
+            }
+        }
+
+        private string Nx2DescribeIndices(ThreedClass engine, int firstIndex, int count)
+        {
+            ulong address = (ulong)engine.Read(0x17c8) << 32 | (uint)engine.Read(0x17cc);
+            int type = engine.Read(0x17d8);
+            int size = type == 0 ? 1 : type == 1 ? 2 : 4;
+            ulong start = address + (ulong)(firstIndex * size);
+
+            if (!_channel.MemoryManager.IsMapped(start))
+            {
+                return $"unmapped 0x{start:X} (type {type})";
+            }
+
+            ReadOnlySpan<byte> data = _channel.MemoryManager.GetSpan(start, count * size);
+            uint min = uint.MaxValue, max = 0;
+
+            for (int i = 0; i < count; i++)
+            {
+                uint value = size == 1 ? data[i] : size == 2 ? System.BitConverter.ToUInt16(data[(i * 2)..]) : System.BitConverter.ToUInt32(data[(i * 4)..]);
+
+                min = Math.Min(min, value);
+                max = Math.Max(max, value);
+            }
+
+            return $"0x{start:X} type {type} count {count} min {min} max {max}";
+        }
+
+        // RYUJINX_NX2_CB_WATCH=<program hex>:<stage>:<slot>:<word>: logs, for the draws of that program, a
+        // uniform buffer word when it starts or stops being NaN (finds the frame where a value goes bad).
+        private static readonly string[] _nx2CbWatch = Environment.GetEnvironmentVariable("RYUJINX_NX2_CB_WATCH")?.ToUpperInvariant().Split(':');
+        private static readonly System.Diagnostics.Stopwatch _nx2CbWatchClock = System.Diagnostics.Stopwatch.StartNew();
+        public static bool Nx2WatchesUniforms => _nx2CbWatch != null;
+        private int _nx2CbWatchState = -1;
+        private int _nx2CbWatchDraws;
+
+        private void Nx2WatchUniformWord()
+        {
+            if (GpuContext.Nx2LastProgram == null || !GpuContext.Nx2LastProgram.Contains("0x" + _nx2CbWatch[0]))
+            {
+                return;
+            }
+
+            int stage = int.Parse(_nx2CbWatch[1]);
+            int slot = int.Parse(_nx2CbWatch[2]);
+            int word = int.Parse(_nx2CbWatch[3]);
+            ulong address = _channel.BufferManager.GetGraphicsUniformBufferAddress(stage, slot);
+            int size = _channel.BufferManager.GetGraphicsUniformBufferSize(stage, slot);
+
+            if (size < (word + 1) * 4 || address == MemoryManager.PteUnmapped)
+            {
+                return;
+            }
+
+            uint value = _channel.MemoryManager.Physical.Read<uint>(address + (ulong)word * 4);
+            int state = float.IsNaN(BitConverter.UInt32BitsToSingle(value)) ? 1 : 0;
+            int draws = ++_nx2CbWatchDraws;
+
+            if (state != _nx2CbWatchState || draws <= 3)
+            {
+                _nx2CbWatchState = state;
+
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 cbuf watch: draw {draws} at {_nx2CbWatchClock.Elapsed.TotalSeconds:F2}s, s{stage} c{slot} at 0x{address:X} word {word} = 0x{value:x8} ({BitConverter.UInt32BitsToSingle(value):G5})");
+            }
+        }
+
         /// <summary>
         /// Performs a indexed or non-indexed draw.
         /// </summary>
@@ -626,32 +734,6 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// <param name="firstVertex">First vertex on the vertex buffer</param>
         /// <param name="firstInstance">First instance</param>
         /// <param name="indexed">True if the draw is indexed, false otherwise</param>
-        private string Nx2DescribeIndices(ThreedClass engine, int firstIndex, int count)
-        {
-            ulong address = (ulong)engine.Read(0x17c8) << 32 | (uint)engine.Read(0x17cc);
-            int type = engine.Read(0x17d8);
-            int size = type == 0 ? 1 : type == 1 ? 2 : 4;
-            ulong start = address + (ulong)(firstIndex * size);
-
-            if (!_channel.MemoryManager.IsMapped(start))
-            {
-                return $"unmapped 0x{start:X} (type {type})";
-            }
-
-            ReadOnlySpan<byte> data = _channel.MemoryManager.GetSpan(start, count * size);
-            uint min = uint.MaxValue, max = 0;
-
-            for (int i = 0; i < count; i++)
-            {
-                uint value = size == 1 ? data[i] : size == 2 ? System.BitConverter.ToUInt16(data[(i * 2)..]) : System.BitConverter.ToUInt32(data[(i * 4)..]);
-
-                min = Math.Min(min, value);
-                max = Math.Max(max, value);
-            }
-
-            return $"0x{start:X} type {type} count {count} min {min} max {max}";
-        }
-
         private void DrawImpl(
             ThreedClass engine,
             int count,
@@ -661,6 +743,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             int firstInstance,
             bool indexed)
         {
+            if (_nx2CbWatch != null)
+            {
+                Nx2WatchUniformWord();
+            }
+
             if (Nx2PassDumper.Active)
             {
                 GpuContext.Nx2LastDrawProgram = GpuContext.Nx2LastProgram;
@@ -675,6 +762,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     {
                         Nx2PassDumper.Note($"indices: {Nx2DescribeIndices(engine, firstIndex, count)}");
                     }
+
+                    Nx2DescribeUniformBuffers(instanceCount);
 
                     _channel.TextureManager.Nx2DumpGraphicsSamples("input");
                 }
@@ -724,6 +813,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 {
                     _context.Renderer.Pipeline.Draw(count, instanceCount, firstVertex, firstInstance);
                 }
+            }
+
+            if (Nx2PassDumper.Active && Nx2PassDumper.TargetRenderTarget != 0)
+            {
+                _channel.TextureManager.Nx2DumpRenderTargetAfterDraw(GpuContext.Nx2LastProgram);
             }
         }
 

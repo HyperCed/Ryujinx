@@ -578,6 +578,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
 
             if (operation == 1) // RELEASE
             {
+                _context.Nx2SyncBeforeRelease(_channel.TextureManager);
                 MemoryManager.Write(address, payload);
                 GpuContext.Nx2RecordSemaphore("sem_execute", address, payload);
                 _context.Nx2NoteDirectRelease(address);

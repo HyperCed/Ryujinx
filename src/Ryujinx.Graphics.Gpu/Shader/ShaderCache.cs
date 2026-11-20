@@ -238,6 +238,19 @@ namespace Ryujinx.Graphics.Gpu.Shader
             TranslatedShader translatedShader = TranslateShader(_dumper, channel, translatorContext, cachedGuestCode, asCompute: false);
 
             ShaderSource[] shaderSourcesArray = new ShaderSource[] { CreateShaderSource(translatedShader.Program) };
+
+            if (gpuVa == _nx2SpirvDumpProgram && _nx2MeshSpirvDump != null)
+            {
+                System.IO.Directory.CreateDirectory(_nx2MeshSpirvDump);
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(_nx2MeshSpirvDump, $"{gpuVa:x}.Compute.spv"), shaderSourcesArray[0].BinaryCode);
+
+                if (nx2Program != null)
+                {
+                    System.IO.File.WriteAllBytes(System.IO.Path.Combine(_nx2MeshSpirvDump, $"{gpuVa:x}.native.bin"), nx2Program.NativeCode);
+                    System.IO.File.WriteAllBytes(System.IO.Path.Combine(_nx2MeshSpirvDump, $"{gpuVa:x}.lowered.bin"), nx2Program.LoweredCode);
+                }
+            }
+
             ShaderInfo info = ShaderInfoBuilder.BuildForCompute(_context, translatedShader.Program.Info);
             IProgram hostProgram = _context.Renderer.CreateProgram(shaderSourcesArray, info);
 
