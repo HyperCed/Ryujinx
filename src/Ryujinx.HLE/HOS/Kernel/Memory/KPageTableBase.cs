@@ -196,7 +196,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
 
                 case ProcessCreationFlags.AddressSpace64BitDeprecated:
                     aliasRegion.Size = 0x180000000;
-                    heapRegion.Size = memConfig is MemoryConfiguration.MemoryConfiguration12GiB or MemoryConfiguration.MemoryConfiguration16GiB ? 0x300000000u : 0x180000000u;
+                    heapRegion.Size = memConfig is MemoryConfiguration.MemoryConfiguration12GiB or MemoryConfiguration.MemoryConfiguration16GiB or MemoryConfiguration.MemoryConfiguration32GiB ? 0x300000000u : 0x180000000u;
                     stackRegion.Size = 0;
                     tlsIoRegion.Size = 0;
                     CodeRegionStart = 0x8000000;
@@ -226,7 +226,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
                         int addressSpaceWidth = (int)ulong.Log2(_reservedAddressSpaceSize);
 
                         aliasRegion.Size = 1UL << (addressSpaceWidth - 3);
-                        heapRegion.Size = memConfig is MemoryConfiguration.MemoryConfiguration12GiB or MemoryConfiguration.MemoryConfiguration16GiB ? 0x300000000u : 0x180000000u;
+                        heapRegion.Size = memConfig is MemoryConfiguration.MemoryConfiguration12GiB or MemoryConfiguration.MemoryConfiguration16GiB or MemoryConfiguration.MemoryConfiguration32GiB ? 0x300000000u : 0x180000000u;
                         stackRegion.Size = 1UL << (addressSpaceWidth - 8);
                         tlsIoRegion.Size = 1UL << (addressSpaceWidth - 3);
                         CodeRegionStart = BitUtils.AlignDown(address, RegionAlignment);
@@ -240,7 +240,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
                     else
                     {
                         aliasRegion.Size = 0x1000000000;
-                        heapRegion.Size = memConfig is MemoryConfiguration.MemoryConfiguration12GiB or MemoryConfiguration.MemoryConfiguration16GiB ? 0x300000000u : 0x180000000u;
+                        heapRegion.Size = memConfig is MemoryConfiguration.MemoryConfiguration12GiB or MemoryConfiguration.MemoryConfiguration16GiB or MemoryConfiguration.MemoryConfiguration32GiB ? 0x300000000u : 0x180000000u;
                         stackRegion.Size = 0x80000000;
                         tlsIoRegion.Size = 0x1000000000;
                         CodeRegionStart = BitUtils.AlignDown(address, RegionAlignment);

@@ -98,6 +98,52 @@ namespace Ryujinx.Graphics.Gpu
         /// the CPU and GPU waits read the same offset in the first.
         /// </summary>
         /// <param name="address">GPU virtual address of the region</param>
+        private readonly Dictionary<ulong, ulong> _nx2GpuOnlyRegions = new();
+
+        /// <summary>
+        /// RYUJINX_NX2_ALLOC_TRACE=1: logs buffers and textures of 32 MiB or more as they are created.
+        /// </summary>
+        internal static readonly bool Nx2AllocationTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_ALLOC_TRACE") == "1";
+
+        /// <summary>
+        /// Registers a Switch 2 GPU-only (or sparse) region the graphics server backs: the CPU never writes it,
+        /// so textures created there start from zero instead of loading (and committing) its memory.
+        /// </summary>
+        public void Nx2AddGpuOnlyRegion(ulong address, ulong size)
+        {
+            lock (_nx2GpuOnlyRegions)
+            {
+                _nx2GpuOnlyRegions[address] = size;
+            }
+        }
+
+        public void Nx2RemoveGpuOnlyRegion(ulong address)
+        {
+            lock (_nx2GpuOnlyRegions)
+            {
+                _nx2GpuOnlyRegions.Remove(address);
+            }
+        }
+
+        /// <summary>
+        /// Whether a GPU range lies in a backed Switch 2 GPU-only region.
+        /// </summary>
+        internal bool Nx2IsGpuOnly(ulong address, ulong size)
+        {
+            lock (_nx2GpuOnlyRegions)
+            {
+                foreach ((ulong start, ulong regionSize) in _nx2GpuOnlyRegions)
+                {
+                    if (address >= start && address - start < regionSize && size <= regionSize - (address - start))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         public void Nx2AddSemaphoreRegion(ulong address)
         {
             lock (_nx2SemaphoreRegions)

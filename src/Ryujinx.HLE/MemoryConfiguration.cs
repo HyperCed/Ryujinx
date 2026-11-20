@@ -16,6 +16,10 @@ namespace Ryujinx.HLE
         // The 12 GiB arrangement with 4 GiB more for the system pool: Switch 2 titles use nearly all of
         // their 11 GiB, and the graphics server backs their GPU-only memory (render targets) from its own.
         MemoryConfiguration16GiB = 7,
+
+        // The same with 20 GiB more for the system pool, to back Switch 2 sparse and GPU-only regions (render
+        // targets, virtual textures). Host memory is only reserved: pages are committed when written.
+        MemoryConfiguration32GiB = 8,
     }
 
     static class MemoryConfigurationExtensions
@@ -35,6 +39,7 @@ namespace Ryujinx.HLE
                 MemoryConfiguration.MemoryConfiguration8GiB          => MemoryArrange.MemoryArrange8GiB,
                 MemoryConfiguration.MemoryConfiguration12GiB         => MemoryArrange.MemoryArrange12GiB,
                 MemoryConfiguration.MemoryConfiguration16GiB         => MemoryArrange.MemoryArrange16GiB,
+                MemoryConfiguration.MemoryConfiguration32GiB         => MemoryArrange.MemoryArrange32GiB,
                 _ => throw new AggregateException($"Invalid memory configuration \"{configuration}\"."),
 #pragma warning restore IDE0055
             };
@@ -50,6 +55,7 @@ namespace Ryujinx.HLE
                 MemoryConfiguration.MemoryConfiguration8GiB              => MemorySize.MemorySize8GiB,
                 MemoryConfiguration.MemoryConfiguration12GiB             => MemorySize.MemorySize12GiB,
                 MemoryConfiguration.MemoryConfiguration16GiB             => MemorySize.MemorySize16GiB,
+                MemoryConfiguration.MemoryConfiguration32GiB             => MemorySize.MemorySize32GiB,
                 _ => throw new AggregateException($"Invalid memory configuration \"{configuration}\"."),
 #pragma warning restore IDE0055
             };
@@ -65,6 +71,7 @@ namespace Ryujinx.HLE
                 MemoryConfiguration.MemoryConfiguration8GiB          => 8 * GiB,
                 MemoryConfiguration.MemoryConfiguration12GiB         => 12 * GiB,
                 MemoryConfiguration.MemoryConfiguration16GiB         => 16 * GiB,
+                MemoryConfiguration.MemoryConfiguration32GiB         => 32 * GiB,
                 _ => throw new AggregateException($"Invalid memory configuration \"{configuration}\"."),
 #pragma warning restore IDE0055
             };

@@ -280,11 +280,16 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                 // some this way without 215).
                 DestroyRegion(context, start);
 
-                bool backSparse = _backSparseRegions && size <= MaxBackedSparseRegionSize;
+                bool sparse = (flags & SparseRegionFlag) != 0;
 
-                if (((flags & SparseRegionFlag) == 0 || backSparse) && last > start && size % KPageTableBase.PageSize == 0 && size <= MaxBackedRegionSize)
+                if ((!sparse || _backSparseRegions) && last > start && size % KPageTableBase.PageSize == 0 && size <= MaxBackedRegionSize)
                 {
                     BackRegion(context, start, size);
+
+                    if (sparse && _regions.ContainsKey(start))
+                    {
+                        _sparseRegions.Add(start);
+                    }
                 }
                 else
                 {
@@ -299,11 +304,18 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
 
         private const uint SparseRegionFlag = 0x200;
 
-        // RYUJINX_NX2_BACK_SPARSE=1: back sparse regions up to MaxBackedSparseRegionSize too, so textures
-        // there (render targets the game never maps memory under) can be created.
-        private static readonly bool _backSparseRegions = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_BACK_SPARSE") == "1";
-        private const ulong MaxBackedSparseRegionSize = 400UL << 20;
+        // Sparse regions are backed too (as the system pool allows: MemoryConfiguration32GiB leaves room), so
+        // textures there can be created: render targets the game never maps memory under, and virtual
+        // textures whose resident tiles the game maps with 216 (those mappings replace the backing). Pages
+        // never written cost no host memory. RYUJINX_NX2_BACK_SPARSE=0 leaves them unbacked.
+        private static readonly bool _backSparseRegions = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_BACK_SPARSE") != "0";
+        // Larger regions hold virtual textures (gigabytes): backed, Ryujinx would create and upload them whole
+        // (Lichii binds them as sparse images instead), which does not fit in a 16 GB Mac.
         private const ulong MaxBackedRegionSize = 512UL << 20;
+        private const ulong MaxContiguousRegionSize = 512UL << 20;
+
+        // Backed regions created sparse: the game's own mappings (216) apply over their backing.
+        private readonly HashSet<ulong> _sparseRegions = [];
 
         // System memory left to the services when backing GPU-only regions.
         private const ulong ServicePoolReservePages = (256UL << 20) / KPageTableBase.PageSize;
@@ -342,7 +354,8 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
                 return;
             }
 
-            ulong physicalAddress = pool.AllocatePagesContiguous(kernel, pages, backwards: true);
+            // The page heap's largest block is 1 GiB: larger regions are backed from a page list.
+            ulong physicalAddress = size <= MaxContiguousRegionSize ? pool.AllocatePagesContiguous(kernel, pages, backwards: true) : 0;
             bool nonContiguous = physicalAddress == 0;
             ulong cpuAddress;
             Result result;
@@ -401,6 +414,7 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
             }
 
             _regions[start] = (cpuAddress, size);
+            context.Device.Gpu.Nx2AddGpuOnlyRegion(start, size);
             Nx2GpuMemoryRegistry.MapAt(start, cpuAddress, size);
 
             Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 214 GPU-only region [{start:x}, +{size >> 20} MiB] backed{(nonContiguous ? " from non-contiguous pages" : "")} at 0x{cpuAddress:x}");
@@ -412,6 +426,9 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
             {
                 return;
             }
+
+            _sparseRegions.Remove(start);
+            context.Device.Gpu.Nx2RemoveGpuOnlyRegion(start);
 
             Nx2GpuMemoryRegistry.Unmap(start, region.Size);
 

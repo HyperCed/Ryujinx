@@ -64,7 +64,8 @@ namespace Ryujinx.Graphics.Shader.Translation
                 program = Decoder.Decode(definitions, gpuAccessor, address + HeaderSize);
             }
 
-            definitions.Nx2NativeProgram = gpuAccessor.QueryNx2NativeProgram();
+            // RYUJINX_NX2_NO_IMAGE_BOUNDS=1: no bounds checks on surface atomics and stores (experiment).
+            definitions.Nx2NativeProgram = gpuAccessor.QueryNx2NativeProgram() && Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_IMAGE_BOUNDS") != "1";
 
             ulong maxEndAddress = 0;
 
