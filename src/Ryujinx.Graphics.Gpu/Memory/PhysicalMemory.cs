@@ -44,6 +44,25 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// </summary>
         /// <param name="context">GPU context that the physical memory belongs to</param>
         /// <param name="cpuMemory">CPU memory manager of the application process</param>
+        private int _nx2SparseWrites;
+
+        public bool Nx2InSparseRegion(ulong gpuVa) => _context.Nx2Ampere && _context.Nx2InSparseRegion(gpuVa);
+
+        public void Nx2NoteSparseWrite(ulong gpuVa, ulong size)
+        {
+            if (!_context.Nx2Ampere || !_context.Nx2InSparseRegion(gpuVa))
+            {
+                return;
+            }
+
+            if (_nx2SparseWrites++ < 32)
+            {
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 GPU write into a sparse region: 0x{gpuVa:X}+0x{size:x} ({Environment.StackTrace.Split('\n')[4].Trim()})");
+            }
+
+            _context.Nx2VirtualTextures.Mapped(gpuVa, size);
+        }
+
         public PhysicalMemory(GpuContext context, IVirtualMemoryManagerTracked cpuMemory)
         {
             _context = context;

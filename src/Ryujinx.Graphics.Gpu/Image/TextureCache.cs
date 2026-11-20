@@ -282,6 +282,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         }
 
         private readonly HashSet<ulong> _nx2UnmappedTraced = [];
+        private int _nx2SparseCreations;
 
         // Switch 2 titles render 3D textures slice by slice: each slice is a render target with the 3D
         // layout, depth 1, at the volume's address plus the slice's offset inside a GOB block (z * 512 bytes
@@ -890,6 +891,11 @@ namespace Ryujinx.Graphics.Gpu.Image
                 {
                     return null;
                 }
+            }
+
+            if (_context.Nx2Ampere && _context.Nx2InSparseRegion(info.GpuAddress) && _nx2SparseCreations++ < 40)
+            {
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 texture lookup in a sparse region: 0x{info.GpuAddress:X} {info.Target} {info.Width}x{info.Height}x{info.DepthOrLayers} levels {info.Levels} {info.FormatInfo.Format} ({string.Join(" <- ", Environment.StackTrace.Split('\n')[3..7].Select(x => x.Trim().Split('(')[0].Replace("at Ryujinx.Graphics.Gpu.", "")))})");
             }
 
             int sameAddressOverlapsCount;

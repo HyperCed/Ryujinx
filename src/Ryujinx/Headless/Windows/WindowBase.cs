@@ -121,6 +121,18 @@ namespace Ryujinx.Headless
         private static readonly string _frameCaptureDirectory = Environment.GetEnvironmentVariable("RYUJINX_FRAME_CAPTURE");
         private static readonly int _frameCaptureInterval = int.TryParse(Environment.GetEnvironmentVariable("RYUJINX_FRAME_CAPTURE_EVERY"), out int every) && every > 0 ? every : 120;
         private long _presentedFrames;
+
+        // RYUJINX_FRAME_CAPTURE_FROM=<n> (+ RYUJINX_FRAME_CAPTURE_COUNT=<m>, default 60): capture every presented
+        // frame from the n-th on, m of them (to see what changes from one frame to the next).
+        private static readonly long _frameCaptureFrom = long.TryParse(Environment.GetEnvironmentVariable("RYUJINX_FRAME_CAPTURE_FROM"), out long from) ? from : -1;
+        private static readonly long _frameCaptureCount = long.TryParse(Environment.GetEnvironmentVariable("RYUJINX_FRAME_CAPTURE_COUNT"), out long count) ? count : 60;
+
+        private static bool CaptureThisFrame(long frame)
+        {
+            return _frameCaptureFrom >= 0
+                ? frame >= _frameCaptureFrom && frame < _frameCaptureFrom + _frameCaptureCount
+                : frame % _frameCaptureInterval == 0;
+        }
         private int _capturedFrames;
 
         private void CaptureFrame(object sender, ScreenCaptureImageInfo e)
@@ -363,7 +375,7 @@ namespace Ryujinx.Headless
                     {
                         Device.PresentFrame(SwapBuffers);
 
-                        if (_frameCaptureDirectory != null && _presentedFrames++ % _frameCaptureInterval == 0)
+                        if (_frameCaptureDirectory != null && CaptureThisFrame(_presentedFrames++))
                         {
                             Renderer.Screenshot();
                         }

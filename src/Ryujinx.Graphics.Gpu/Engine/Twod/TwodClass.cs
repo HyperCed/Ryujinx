@@ -227,11 +227,56 @@ namespace Ryujinx.Graphics.Gpu.Engine.Twod
         /// Performs the blit operation, triggered by the register write.
         /// </summary>
         /// <param name="argument">Method call argument</param>
+        // RYUJINX_NX2_HOST_SPARSE_COPIES=1: blits into Switch 2 sparse regions stay host copies (to compare).
+        private static readonly bool _nx2HostSparseCopies = Environment.GetEnvironmentVariable("RYUJINX_NX2_HOST_SPARSE_COPIES") == "1";
+
+        private void Nx2CpuCopy(TwodTexture src, ulong srcOffset, TwodTexture dst, int srcX, int srcY, int dstX, int dstY, int width, int height, int bpp)
+        {
+            MemoryManager memoryManager = _channel.MemoryManager;
+
+            OffsetCalculator srcCalculator = new(src.Width, src.Height, src.Stride, src.LinearLayout, src.MemoryLayout.UnpackGobBlocksInY(), src.MemoryLayout.UnpackGobBlocksInZ(), bpp);
+            OffsetCalculator dstCalculator = new(dst.Width, dst.Height, dst.Stride, dst.LinearLayout, dst.MemoryLayout.UnpackGobBlocksInY(), dst.MemoryLayout.UnpackGobBlocksInZ(), bpp);
+
+            (int srcBase, int srcSize) = srcCalculator.GetRectangleRange(srcX, srcY, width, height);
+            (int dstBase, int dstSize) = dstCalculator.GetRectangleRange(dstX, dstY, width, height);
+
+            ulong srcGpuVa = src.Address.Pack() + srcOffset;
+            ulong dstGpuVa = dst.Address.Pack();
+
+            // A tracked read: GPU-written source data is flushed first.
+            ReadOnlySpan<byte> srcSpan = memoryManager.GetSpan(srcGpuVa + (ulong)srcBase, srcSize, true);
+            byte[] dstData = memoryManager.GetSpan(dstGpuVa + (ulong)dstBase, dstSize).ToArray();
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int srcIndex = srcCalculator.GetOffset(srcX + x, srcY + y) - srcBase;
+                    int dstIndex = dstCalculator.GetOffset(dstX + x, dstY + y) - dstBase;
+
+                    srcSpan.Slice(srcIndex, bpp).CopyTo(dstData.AsSpan(dstIndex, bpp));
+                }
+            }
+
+            memoryManager.Write(dstGpuVa + (ulong)dstBase, dstData);
+        }
+
+        private static readonly bool _nx2Trace = Environment.GetEnvironmentVariable("RYUJINX_NX2_2D_TRACE") == "1";
+        private static int _nx2Traces;
+
         private void PixelsFromMemorySrcY0Int(int argument)
         {
             MemoryManager memoryManager = _channel.MemoryManager;
 
             TwodTexture dstCopyTexture = Unsafe.As<uint, TwodTexture>(ref _state.State.SetDstFormat);
+
+            if (_nx2Trace && _nx2Traces++ < 60)
+            {
+                TwodTexture nx2Src = Unsafe.As<uint, TwodTexture>(ref _state.State.SetSrcFormat);
+
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                    $"Switch 2 2D copy 0x{nx2Src.Address.Pack():X} ({nx2Src.Width}x{nx2Src.Height} {nx2Src.Format} linear {nx2Src.LinearLayout}) -> 0x{dstCopyTexture.Address.Pack():X} ({dstCopyTexture.Width}x{dstCopyTexture.Height} {dstCopyTexture.Format} linear {dstCopyTexture.LinearLayout})");
+            }
             TwodTexture srcCopyTexture = Unsafe.As<uint, TwodTexture>(ref _state.State.SetSrcFormat);
 
             long srcX = ((long)_state.State.SetPixelsFromMemorySrcX0Int << 32) | (long)(ulong)_state.State.SetPixelsFromMemorySrcX0Frac;
@@ -304,6 +349,17 @@ namespace Ryujinx.Graphics.Gpu.Engine.Twod
             // We can only allow aliasing of color formats as depth if the source and destination textures
             // are the same, as we can't blit between different depth formats.
             bool srcDepthAlias = srcCopyTexture.Format == dstCopyTexture.Format;
+
+            if (memoryManager.Physical.Nx2InSparseRegion(dstCopyTexture.Address.Pack()) && !_nx2HostSparseCopies &&
+                srcX2 - srcX1 == dstX2 - dstX1 && srcY2 - srcY1 == dstY2 - dstY1 &&
+                srcCopyTextureFormat.BytesPerPixel == dstCopyTextureFormat.BytesPerPixel)
+            {
+                // Switch 2 titles fill the tiles of their virtual textures (sparse regions) with blits: in guest
+                // memory, where the virtual textures read them (Nx2VirtualTextures), not in a host texture.
+                Nx2CpuCopy(srcCopyTexture, offset, dstCopyTexture, srcX1, srcY1, dstX1, dstY1, srcX2 - srcX1, srcY2 - srcY1, srcCopyTextureFormat.BytesPerPixel);
+
+                return;
+            }
 
             Image.Texture srcTexture = memoryManager.Physical.TextureCache.FindOrCreateTexture(
                 memoryManager,

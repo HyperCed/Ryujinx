@@ -56,6 +56,15 @@ namespace Ryujinx.Graphics.Gpu.Image
             public TextureInfo Info;
             public readonly List<(ulong Offset, ulong Size)> Pending = [];
             public ulong UploadedBytes;
+
+            // The ranges uploaded, tracked: the game's CPU fills the tiles it maps (often after mapping
+            // them, reusing a slot that held another tile), so a write there uploads the range again (as
+            // Lichii's MarkRangeWritten).
+            public readonly List<(ulong Offset, ulong Size, GpuRegionHandle Handle)> Tracked = [];
+            public readonly Dictionary<ulong, (ulong Size, ulong Hash)> Hashes = [];
+            public long Refreshes;
+            public long HashChecks;
+            public int Dumped;
         }
 
         private static readonly bool _disabled = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_SPARSE_TEXTURES") == "1";
@@ -152,22 +161,7 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             // Everything mapped now.
             ulong span = stride * (ulong)(layers - 1) + layerBytes;
-            MultiRange ranges = memoryManager.GetPhysicalRegions(info.GpuAddress, span);
-            ulong offset = 0;
-            ulong mapped = 0;
-
-            for (int index = 0; index < ranges.Count; index++)
-            {
-                MemoryRange range = ranges.GetSubRange(index);
-
-                if (range.Address != MemoryManager.PteUnmapped)
-                {
-                    entry.Pending.Add((offset, range.Size));
-                    mapped += range.Size;
-                }
-
-                offset += range.Size;
-            }
+            ulong mapped = QueueMapped(entry);
 
             Logger.Info?.Print(LogClass.Gpu, $"Switch 2 virtual texture 0x{info.GpuAddress:X}: sparse {info.Width}x{info.Height}x{layers} levels {info.Levels} {info.FormatInfo.Format}, " +
                 $"layer stride 0x{stride:x}, 0x{mapped:x} of 0x{span:x} bytes mapped");
@@ -226,10 +220,43 @@ namespace Ryujinx.Graphics.Gpu.Image
                 }
             }
 
+            // RYUJINX_NX2_VT_HASH=1: every 2000 refreshes, logs the uploaded ranges whose memory changed since.
+            if (_hashCheck && ++entry.HashChecks % 2000 == 0)
+            {
+                int changed = 0;
+                ulong changedBytes = 0;
+
+                foreach ((ulong offset, (ulong size, ulong hash)) in entry.Hashes)
+                {
+                    if (Hash(entry, offset, size) != hash)
+                    {
+                        changed++;
+                        changedBytes += size;
+                    }
+                }
+
+                Logger.Info?.Print(LogClass.Gpu, $"Switch 2 virtual texture 0x{entry.Address:X}: {changed} of {entry.Hashes.Count} uploaded ranges changed in memory (0x{changedBytes:x} bytes), {entry.Tracked.Count} tracked");
+            }
+
+            // RYUJINX_NX2_VT_REFRESH=<n>: every n refreshes, upload everything mapped again (to see whether the
+            // game writes its tiles after mapping them).
+            if (_refreshEvery > 0 && ++entry.Refreshes % _refreshEvery == 0)
+            {
+                QueueMapped(entry);
+            }
+
             (ulong Offset, ulong Size)[] pending;
 
             lock (entry.Pending)
             {
+                foreach ((ulong offset, ulong size, GpuRegionHandle handle) in entry.Tracked)
+                {
+                    if (handle.Dirty)
+                    {
+                        entry.Pending.Add((offset, size));
+                    }
+                }
+
                 if (entry.Pending.Count == 0)
                 {
                     return;
@@ -241,7 +268,101 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             foreach ((ulong offset, ulong size) in pending)
             {
+                Track(entry, offset, size);
                 Upload(entry, offset, size);
+
+                if (_hashCheck)
+                {
+                    entry.Hashes[offset] = (size, Hash(entry, offset, size));
+                }
+
+                if (_rawDump != null && entry.Dumped++ < 4)
+                {
+                    System.IO.Directory.CreateDirectory(_rawDump);
+                    System.IO.File.WriteAllBytes(System.IO.Path.Combine(_rawDump, $"vt_{entry.Address:x}_{offset:x}_{size:x}.bin"),
+                        entry.MemoryManager.Physical.GetSpan(entry.MemoryManager.GetPhysicalRegions(entry.Address + offset, size)).ToArray());
+                }
+            }
+        }
+
+        private static readonly int _refreshEvery = int.TryParse(Environment.GetEnvironmentVariable("RYUJINX_NX2_VT_REFRESH"), out int every) ? every : 0;
+
+        private static ulong QueueMapped(Entry entry)
+        {
+            ulong span = entry.LayerStride * (ulong)(entry.Layers - 1) + entry.LayerBytes;
+            MultiRange ranges = entry.MemoryManager.GetPhysicalRegions(entry.Address, span);
+            ulong offset = 0;
+            ulong mapped = 0;
+
+            lock (entry.Pending)
+            {
+                for (int index = 0; index < ranges.Count; index++)
+                {
+                    MemoryRange range = ranges.GetSubRange(index);
+
+                    if (range.Address != MemoryManager.PteUnmapped)
+                    {
+                        entry.Pending.Add((offset, range.Size));
+                        mapped += range.Size;
+                    }
+
+                    offset += range.Size;
+                }
+            }
+
+            return mapped;
+        }
+
+        private static int _writesSeen;
+        // RYUJINX_NX2_VT_DUMP=<dir>: the raw guest bytes of the first ranges each virtual texture uploads.
+        private static readonly string _rawDump = Environment.GetEnvironmentVariable("RYUJINX_NX2_VT_DUMP");
+        private static readonly bool _hashCheck = Environment.GetEnvironmentVariable("RYUJINX_NX2_VT_HASH") == "1";
+
+        private static ulong Hash(Entry entry, ulong offset, ulong size)
+        {
+            ReadOnlySpan<byte> data = entry.MemoryManager.Physical.GetSpan(entry.MemoryManager.GetPhysicalRegions(entry.Address + offset, size));
+            ulong hash = 14695981039346656037UL;
+
+            for (int index = 0; index < data.Length; index += 64)
+            {
+                hash = (hash ^ System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(data[index..])) * 1099511628211UL;
+            }
+
+            return hash;
+        }
+
+        // Tracks a range about to be uploaded, replacing the tracking of the ranges it overlaps.
+        private static void Track(Entry entry, ulong offset, ulong size)
+        {
+            lock (entry.Pending)
+            {
+                for (int index = entry.Tracked.Count - 1; index >= 0; index--)
+                {
+                    (ulong trackedOffset, ulong trackedSize, GpuRegionHandle handle) = entry.Tracked[index];
+
+                    if (trackedOffset < offset + size && offset < trackedOffset + trackedSize)
+                    {
+                        if (handle.Dirty && _writesSeen++ < 16)
+                        {
+                            Logger.Info?.Print(LogClass.Gpu, $"Switch 2 virtual texture 0x{entry.Address:X}: CPU wrote its tiles at +0x{trackedOffset:x} (0x{trackedSize:x} bytes), uploaded again");
+                        }
+
+                        handle.Dispose();
+                        entry.Tracked.RemoveAt(index);
+                    }
+                }
+
+                MultiRange range = entry.MemoryManager.GetPhysicalRegions(entry.Address + offset, size);
+
+                if (range.Count == 1 && range.GetSubRange(0).Address == MemoryManager.PteUnmapped)
+                {
+                    return;
+                }
+
+                GpuRegionHandle tracking = entry.MemoryManager.Physical.BeginTracking(range, ResourceKind.Texture);
+
+                tracking.Reprotect();
+                entry.Tracked.Add((offset, size, tracking));
             }
         }
 
@@ -369,6 +490,25 @@ namespace Ryujinx.Graphics.Gpu.Image
             if (swizzled.Length < sizeInfo.TotalSize)
             {
                 return;
+            }
+
+            if (info.FormatInfo.Format.IsAstc)
+            {
+                // Zero bytes are a reserved ASTC block mode, decoded as the error colour (magenta). Tiles the game
+                // maps but never fills hold zeros, which read as zero on the console (Lichii leaves such blocks
+                // without memory): they become empty void-extent blocks.
+                byte[] blocks = swizzled.ToArray();
+
+                for (int offset = 0; offset + 16 <= blocks.Length; offset += 16)
+                {
+                    if (System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(blocks.AsSpan(offset)) == 0 &&
+                        System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(blocks.AsSpan(offset + 8)) == 0)
+                    {
+                        PhysicalMemory.AstcTransparentBlock.CopyTo(blocks, offset);
+                    }
+                }
+
+                swizzled = blocks;
             }
 
             using MemoryOwner<byte> linear = LayoutConverter.ConvertBlockLinearToLinear(

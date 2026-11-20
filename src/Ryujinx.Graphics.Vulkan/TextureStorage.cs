@@ -670,11 +670,14 @@ namespace Ryujinx.Graphics.Vulkan
         /// <summary>
         /// Gives memory to the blocks of a sparse image that a region of one level and layer covers.
         /// </summary>
-        public unsafe void Nx2BindSparse(int layer, int level, int x, int y, int width, int height)
+        /// <returns>The regions (layer, level, x, y, width, height) that just got memory: their content is undefined</returns>
+        public unsafe List<(int Layer, int Level, int X, int Y, int Width, int Height)> Nx2BindSparse(int layer, int level, int x, int y, int width, int height)
         {
+            List<(int Layer, int Level, int X, int Y, int Width, int Height)> fresh = [];
+
             if (_nx2Tiles == null)
             {
-                return;
+                return fresh;
             }
 
             List<SparseImageMemoryBind> imageBinds = [];
@@ -711,13 +714,24 @@ namespace Ryujinx.Graphics.Vulkan
 
                     if (_nx2Tails.ContainsKey(tailLayer) || _nx2Sparse.ImageMipTailSize == 0)
                     {
-                        return;
+                        return fresh;
                     }
 
                     ulong tailSize = BitUtils.AlignUp(_nx2Sparse.ImageMipTailSize, tileSize);
                     MemoryAllocation tail = Allocate(tailSize);
 
                     _nx2Tails[tailLayer] = tail;
+
+                    int firstLayer = singleTail ? 0 : tailLayer;
+                    int lastLayer = singleTail ? _info.GetLayers() - 1 : tailLayer;
+
+                    for (int tailLevel = _nx2TailLevel; tailLevel < _info.Levels; tailLevel++)
+                    {
+                        for (int fillLayer = firstLayer; fillLayer <= lastLayer; fillLayer++)
+                        {
+                            fresh.Add((fillLayer, tailLevel, 0, 0, Math.Max(_info.Width >> tailLevel, 1), Math.Max(_info.Height >> tailLevel, 1)));
+                        }
+                    }
 
                     opaqueBinds.Add(new SparseMemoryBind
                     {
@@ -750,6 +764,8 @@ namespace Ryujinx.Graphics.Vulkan
                             int tileX = tx * tileWidth;
                             int tileY = ty * tileHeight;
 
+                            fresh.Add((layer, level, tileX, tileY, Math.Min(tileWidth, levelWidth - tileX), Math.Min(tileHeight, levelHeight - tileY)));
+
                             imageBinds.Add(new SparseImageMemoryBind
                             {
                                 Subresource = new ImageSubresource(ImageAspectFlags.ColorBit, (uint)level, (uint)layer),
@@ -764,7 +780,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                 if (imageBinds.Count == 0 && opaqueBinds.Count == 0)
                 {
-                    return;
+                    return fresh;
                 }
 
                 SparseImageMemoryBind[] imageBindArray = imageBinds.ToArray();
@@ -815,6 +831,8 @@ namespace Ryujinx.Graphics.Vulkan
                     }
                 }
             }
+
+            return fresh;
         }
 
         public void Dispose()

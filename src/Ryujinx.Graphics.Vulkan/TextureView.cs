@@ -779,11 +779,33 @@ namespace Ryujinx.Graphics.Vulkan
         }
 
         /// <inheritdoc/>
+        // An ASTC void-extent block of colour (0, 0, 0, 0): zero bytes are a reserved mode, decoded as magenta.
+        private static readonly byte[] Nx2AstcEmptyBlock = [0xfc, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0];
+
         public void SetData(MemoryOwner<byte> data, int layer, int level, Rectangle<int> region)
         {
             if (Storage.IsNx2Sparse)
             {
-                Storage.Nx2BindSparse(FirstLayer + layer, FirstLevel + level, region.X, region.Y, region.Width, region.Height);
+                // Blocks that just got memory hold garbage: fill them whole first (as Lichii uploads whole
+                // blocks), empty ASTC blocks or zeros, then the data goes over its part.
+                foreach ((int fillLayer, int fillLevel, int x, int y, int width, int height) in
+                    Storage.Nx2BindSparse(FirstLayer + layer, FirstLevel + level, region.X, region.Y, region.Width, region.Height))
+                {
+                    int blockWidth = Info.BlockWidth;
+                    int blockHeight = Info.BlockHeight;
+                    int bytes = Ryujinx.Common.BitUtils.DivRoundUp(width, blockWidth) * Ryujinx.Common.BitUtils.DivRoundUp(height, blockHeight) * Info.BytesPerPixel;
+                    byte[] fill = new byte[bytes];
+
+                    if (Info.Format.IsAstc)
+                    {
+                        for (int offset = 0; offset + 16 <= bytes; offset += 16)
+                        {
+                            Nx2AstcEmptyBlock.CopyTo(fill, offset);
+                        }
+                    }
+
+                    SetData(fill, fillLayer - FirstLayer, fillLevel - FirstLevel, 1, 1, singleSlice: true, new Rectangle<int>(x, y, width, height));
+                }
             }
 
             SetData(data.Span, layer, level, 1, 1, singleSlice: true, region);

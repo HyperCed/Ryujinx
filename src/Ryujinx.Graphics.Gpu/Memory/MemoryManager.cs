@@ -344,6 +344,10 @@ namespace Ryujinx.Graphics.Gpu.Memory
         {
             GpuContext.Nx2RecordWrite(va, data);
 
+            // GPU-side writes into the tiles of Switch 2 sparse regions (as Lichii's Nx2BackSparseWrite): the
+            // game fills the tiles it mapped this way, the virtual textures there upload them again.
+            Physical.Nx2NoteSparseWrite(va, (ulong)data.Length);
+
             if (IsContiguous(va, data.Length))
             {
                 writeCallback(Translate(va), data);

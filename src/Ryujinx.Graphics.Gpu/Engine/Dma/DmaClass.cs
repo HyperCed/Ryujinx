@@ -128,6 +128,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Dma
         /// <param name="data">Data to be written</param>
         public void Write(int offset, int data) => _state.Write(offset, data);
 
+        // RYUJINX_NX2_DMA_TRACE=<hex start>-<hex end>: logs the copies whose destination starts in that range.
+        private static readonly ulong[] _nx2DmaTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_DMA_TRACE")?.Split('-') is [string from, string to]
+            ? [Convert.ToUInt64(from, 16), Convert.ToUInt64(to, 16)] : null;
+        private static int _nx2DmaTraces;
+
         /// <summary>
         /// Determine if a buffer-to-texture region covers the entirety of a texture.
         /// </summary>
@@ -216,6 +221,16 @@ namespace Ryujinx.Graphics.Gpu.Engine.Dma
             _3dEngine.CreatePendingSyncs();
             _3dEngine.FlushUboDirty();
 
+            // Switch 2 titles fill the tiles of their virtual textures (sparse regions) with copies: the data
+            // goes to guest memory, where the virtual textures read it (Nx2VirtualTextures), rather than to a
+            // host texture or buffer of the cache.
+            bool nx2Sparse = _context.Nx2Ampere && _context.Nx2InSparseRegion(dstGpuVa);
+
+            if (_nx2DmaTrace != null && dstGpuVa >= _nx2DmaTrace[0] && dstGpuVa < _nx2DmaTrace[1] && _nx2DmaTraces++ < 200)
+            {
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 DMA copy 0x{srcGpuVa:X} -> 0x{dstGpuVa:X}: {xCount} x {yCount}, 2D {copy2D}, src linear {srcLinear}, dst linear {dstLinear}, remap {remap}");
+            }
+
             if (copy2D)
             {
                 // Buffer to texture copy.
@@ -291,7 +306,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Dma
                 // Otherwise, we would need to flush the source texture which is costly.
                 // We don't expect the source to be linear in such cases, as linear source usually indicates buffer or CPU written data.
 
-                if (completeSource && completeDest && !srcLinear && isIdentityRemap)
+                if (completeSource && completeDest && !srcLinear && isIdentityRemap && !nx2Sparse)
                 {
                     Image.Texture source = memoryManager.Physical.TextureCache.FindTexture(
                         memoryManager,
@@ -337,7 +352,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Dma
                 // but only if we are doing a complete copy,
                 // and not for block linear to linear copies, since those are typically accessed from the CPU.
 
-                if (completeSource && completeDest && !(dstLinear && !srcLinear) && isIdentityRemap)
+                if (completeSource && completeDest && !(dstLinear && !srcLinear) && isIdentityRemap && !nx2Sparse)
                 {
                     Image.Texture target = memoryManager.Physical.TextureCache.FindTexture(
                         memoryManager,
@@ -489,6 +504,10 @@ namespace Ryujinx.Graphics.Gpu.Engine.Dma
                     else if (srcIsPitchKind && !dstIsPitchKind)
                     {
                         CopyGobLinearToBlockLinear(memoryManager, srcGpuVa, dstGpuVa, size);
+                    }
+                    else if (nx2Sparse)
+                    {
+                        memoryManager.Write(dstGpuVa, memoryManager.GetSpan(srcGpuVa, (int)size, tracked: true));
                     }
                     else
                     {

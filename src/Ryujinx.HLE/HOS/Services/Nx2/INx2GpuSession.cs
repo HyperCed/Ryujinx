@@ -237,6 +237,11 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
             {
                 if (_memory.TryGetValue(handle, out (ulong Address, ulong Size) memory) && last > first)
                 {
+                    if (_sparseTrace)
+                    {
+                        Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 211 map [{first:x}, {last:x}] handle {handle} offset 0x{offset:x} (CPU 0x{memory.Address + offset:x}, memory 0x{memory.Size:x})");
+                    }
+
                     Nx2GpuMemoryRegistry.MapAt(first, memory.Address + offset, last - first + 1);
                 }
                 else
@@ -556,7 +561,14 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
         {
             if (_sparseTrace && (request.GpuAddress >= _sparseTraceFrom && request.GpuAddress < _sparseTraceTo) && System.Threading.Interlocked.Increment(ref _sparseTraces) <= 2000)
             {
-                Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 216 map [{request.GpuAddress:x}, +{request.Size:x}] handle {request.MemoryHandle} offset 0x{request.Offset:x} kind 0x{request.Kind:x}");
+                (ulong Address, ulong Size) traced = default;
+
+                lock (_lock)
+                {
+                    _memory.TryGetValue(request.MemoryHandle, out traced);
+                }
+
+                Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gpu 216 map [{request.GpuAddress:x}, +{request.Size:x}] handle {request.MemoryHandle} offset 0x{request.Offset:x} kind 0x{request.Kind:x} (memory at 0x{traced.Address:x}+0x{traced.Size:x})");
             }
 
             if (request.Size == 0)

@@ -98,6 +98,8 @@ RYUJINX_NX2_MAXWELL=1 RYUJINX_NX2_COMPUTE=1 RYUJINX_GPU_HANG_ABORT=1 RYUJINX_GPU
 | `RYUJINX_NX2_NO_CB_DIRTY` | off | `1`: constant buffer updates no longer mark the buffer dirty (to compare; draws then read stale constants). |
 | `RYUJINX_NX2_VT_SKIP=<hex>` | none | Leave the virtual texture at that descriptor address unbound (to see what it does). |
 | `RYUJINX_NX2_VT_NO_SRGB` | off | `1`: sample the ASTC virtual textures as linear instead of sRGB (experiment). |
+| `RYUJINX_NX2_NO_2D` | off | `1`: ignore the 2D engine (subchannel 3), as before. |
+| `RYUJINX_NX2_HOST_SPARSE_COPIES` | off | `1`: 2D blits into sparse regions stay host texture copies (the virtual textures then never see their tiles). |
 
 ## 3. Debug
 
@@ -164,7 +166,12 @@ instruction, a scheduling word every 32 bytes).
 | `RYUJINX_NX2_BIGTEX_TRACE=1` | Logs textures of 2048x2048 or more read from the texture pool. |
 | `RYUJINX_NX2_SPARSE_TRACE=1` (+ `RYUJINX_NX2_SPARSE_TRACE_RANGE=<start>-<end>`) | Logs the sparse map requests (gpu 216), optionally only in an address range. |
 | `RYUJINX_NX2_VB_TRACE=1` | Logs vertex buffer bindings and sizes (first 400). |
-| `RYUJINX_NX2_RT_TRACE=1` | Logs each distinct combination of shader and render targets (address, size, format, 3D layout) over the run, and the 3D textures the shaders sample. |
+| `RYUJINX_NX2_RT_TRACE=1` |
+| `RYUJINX_NX2_2D_TRACE=1` | Logs the first 60 2D engine blits (source and destination surfaces). |
+| `RYUJINX_NX2_DMA_TRACE=<start>-<end>` | Logs the copy engine copies whose destination starts in that range. |
+| `RYUJINX_NX2_VT_HASH=1` | Periodically logs how many uploaded ranges of each virtual texture changed in guest memory since. |
+| `RYUJINX_NX2_VT_DUMP=<dir>` | Saves the raw guest bytes of the first ranges each virtual texture uploads. |
+| `RYUJINX_NX2_VT_REFRESH=<n>` | Uploads everything mapped again every n refreshes (experiment). | Logs each distinct combination of shader and render targets (address, size, format, 3D layout) over the run, and the 3D textures the shaders sample. |
 
 The 214 region creations are always logged (`nx2:gpu 214 … region`).
 

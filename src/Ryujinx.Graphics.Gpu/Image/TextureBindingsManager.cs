@@ -437,6 +437,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         // RYUJINX_NX2_TEXBIND_TRACE=1: logs Switch 2 texture bindings bound null or with another target.
         internal static readonly bool _nx2BindTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_TEXBIND_TRACE") == "1";
         private static int _nx2BindTraces;
+        private static int _nx2SparseImageTraces;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void UpdateCachedBuffer(
@@ -721,6 +722,12 @@ namespace Ryujinx.Graphics.Gpu.Image
                 state.ImageFormat = bindingInfo.FormatInfo.Format;
 
                 ref readonly TextureDescriptor descriptor = ref pool.GetForBinding(textureId, bindingInfo.FormatInfo, out Texture texture);
+
+                if (_context.Nx2Ampere && _context.Nx2InSparseRegion(descriptor.UnpackAddress()) && _nx2SparseImageTraces++ < 40)
+                {
+                    Logger.Info?.Print(LogClass.Gpu, $"Switch 2 image binding {stage} b{bindingInfo.Binding} in a sparse region: descriptor 0x{descriptor.UnpackAddress():X} {descriptor.UnpackWidth()}x{descriptor.UnpackHeight()} format 0x{descriptor.UnpackFormat():x}, view format {bindingInfo.FormatInfo.Format} -> " +
+                        (texture == null ? "no texture" : $"{texture.Info.Target} {texture.Info.Width}x{texture.Info.Height}x{texture.Info.DepthOrLayers} {texture.Format}{(texture.Nx2Sparse ? " (virtual)" : "")}") + $" [{GpuContext.Nx2LastProgram}]");
+                }
 
                 specStateMatches &= specState.MatchesImage(stage, index, descriptor);
 

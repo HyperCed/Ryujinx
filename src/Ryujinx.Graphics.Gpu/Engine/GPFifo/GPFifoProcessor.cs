@@ -295,6 +295,15 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                         {
                             _dmaClass.Write(offset * 4, argument);
                         }
+                        else if (subChannel == 3 && Nx2Maxwell && !_nx2NoTwod)
+                        {
+                            // The 2D engine: NVN2 blits with it (the tiles of virtual textures among others).
+                            _2dClass.Write(offset * 4, argument);
+                        }
+                        else if (_nx2IgnoredSubchannels.Add((subChannel, offset)) && _nx2IgnoredSubchannels.Count <= 64)
+                        {
+                            Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 subchannel {subChannel} method 0x{offset:x} = 0x{argument:x} ignored");
+                        }
                     }
                 }
                 else if (offset < Nx2Engine.RegisterCount)
@@ -730,6 +739,10 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         }
 
         private long _nx2SkippedDraws;
+        private static readonly System.Collections.Generic.HashSet<(int, int)> _nx2IgnoredSubchannels = [];
+
+        // RYUJINX_NX2_NO_2D=1: the 2D engine's methods are ignored, as before (to compare).
+        private static readonly bool _nx2NoTwod = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_2D") == "1";
         private long _nx2Suspensions;
 
         /// <summary>

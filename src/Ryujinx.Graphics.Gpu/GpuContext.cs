@@ -138,6 +138,8 @@ namespace Ryujinx.Graphics.Gpu
             lock (_nx2SparseRegions)
             {
                 _nx2SparseRegions[address] = size;
+                _nx2SparseLow = Math.Min(_nx2SparseLow, address);
+                _nx2SparseHigh = Math.Max(_nx2SparseHigh, address + size);
             }
         }
 
@@ -152,8 +154,16 @@ namespace Ryujinx.Graphics.Gpu
         /// <summary>
         /// Whether a GPU address lies in an unbacked Switch 2 sparse region.
         /// </summary>
+        private ulong _nx2SparseLow = ulong.MaxValue;
+        private ulong _nx2SparseHigh;
+
         internal bool Nx2InSparseRegion(ulong address)
         {
+            if (address < Volatile.Read(ref _nx2SparseLow) || address >= Volatile.Read(ref _nx2SparseHigh))
+            {
+                return false;
+            }
+
             lock (_nx2SparseRegions)
             {
                 foreach ((ulong start, ulong size) in _nx2SparseRegions)
