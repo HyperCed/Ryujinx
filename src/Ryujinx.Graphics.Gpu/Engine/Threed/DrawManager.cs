@@ -27,6 +27,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         private bool _topologySet;
 
         private bool _instancedDrawPending;
+
+        /// <summary>
+        /// An instanced draw is deferred, waiting for its last instance.
+        /// </summary>
+        public bool HasPendingInstancedDraw => _instancedDrawPending;
         private bool _instancedIndexed;
         private bool _instancedIndexedInline;
 
@@ -41,6 +46,9 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
         private const int VertexBufferFirstMethodOffset = 0x35d;
         private const int IndexBufferCountMethodOffset = 0x5f8;
+        // RYUJINX_NX2_DRAW_TRACE=1 logs non-trivial draws to large color targets.
+        private static readonly bool _nx2DrawTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_DRAW_TRACE") == "1";
+        private int _nx2SceneDrawTraces;
 
         /// <summary>
         /// Creates a new instance of the draw manager.
@@ -122,6 +130,9 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// <param name="indexCount">Number of index buffer elements used on the draw</param>
         /// <param name="drawFirstVertex">Index of the first vertex used on the draw</param>
         /// <param name="drawVertexCount">Number of vertices used on the draw</param>
+        private int _nx2DrawTraces;
+        private int _nx2OversizedDraws;
+
         private void DrawEnd(ThreedClass engine, int firstIndex, int indexCount, int drawFirstVertex, int drawVertexCount)
         {
             ConditionalRenderEnabled renderEnable = ConditionalRendering.GetRenderEnable(
@@ -147,6 +158,21 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 return;
             }
 
+            // Switch 2: a count this large is wrong data (GPU-written parameters read stale), not a draw;
+            // running it would keep the GPU busy for seconds, which on a Mac also stalls the screen.
+            if (_context.Nx2Ampere && ((uint)indexCount > 1u << 24 || (uint)drawVertexCount > 1u << 24))
+            {
+                if (_nx2OversizedDraws++ < 16)
+                {
+                    Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                        $"Switch 2 draw skipped: {indexCount} indices, {drawVertexCount} vertices");
+                }
+
+                _drawState.DrawIndexed = false;
+
+                return;
+            }
+
             _drawState.FirstIndex = firstIndex;
             _drawState.IndexCount = indexCount;
             _drawState.DrawFirstVertex = drawFirstVertex;
@@ -154,6 +180,30 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             _currentSpecState.SetHasConstantBufferDrawParameters(false);
 
             engine.UpdateState();
+
+            if (_nx2DrawTrace && _context.Nx2Ampere && _nx2SceneDrawTraces < 1000 &&
+                (_drawState.Nx2MeshDraw || (_state.State.RtColorMask[0].Packed != 0 && (indexCount > 6 || drawVertexCount > 6))))
+            {
+                ref var colorState = ref _state.State.RtColorState[0];
+
+                if (colorState.Address.Pack() != 0 && colorState.WidthOrStride >= 1920 && colorState.Height >= 1080)
+                {
+                    _nx2SceneDrawTraces++;
+                    ref var viewport = ref _state.State.ViewportExtents[0];
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                        $"Switch 2 scene draw to 0x{colorState.Address.Pack():X}: {colorState.WidthOrStride}x{colorState.Height} {colorState.Format}, indexed {_drawState.DrawIndexed}, first index {firstIndex} count {indexCount}, vertices {drawFirstVertex}+{drawVertexCount}, " +
+                        $"viewport {viewport.X},{viewport.Y} {viewport.Width}x{viewport.Height}, rt control 0x{_state.State.RtControl.Packed:x}, color mask 0x{_state.State.RtColorMask[0].Packed:x}, mesh {_drawState.Nx2MeshDraw}, program {GpuContext.Nx2LastProgram}");
+                }
+            }
+
+            if (GpuContext.Nx2PresentTrace && _context.Nx2Ampere && _nx2DrawTraces < 40 && _state.State.RtColorState[0].Address.Pack() == GpuContext.Nx2PresentedAddress)
+            {
+                _nx2DrawTraces++;
+                ref var viewport = ref _state.State.ViewportExtents[0];
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                    $"Switch 2 draw to 0x{_state.State.RtColorState[0].Address.Pack():X}: render enable {renderEnable}, indexed {_drawState.DrawIndexed}, first index {firstIndex} count {indexCount}, vertices {drawFirstVertex}+{drawVertexCount}, " +
+                    $"viewport {viewport.X},{viewport.Y} {viewport.Width}x{viewport.Height}, rt control 0x{_state.State.RtControl.Packed:x}, color mask 0x{_state.State.RtColorMask[0].Packed:x}, program {GpuContext.Nx2LastProgram}");
+            }
 
             bool instanced = _drawState.VsUsesInstanceId || _drawState.IsAnyVbInstanced;
 
@@ -576,6 +626,32 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// <param name="firstVertex">First vertex on the vertex buffer</param>
         /// <param name="firstInstance">First instance</param>
         /// <param name="indexed">True if the draw is indexed, false otherwise</param>
+        private string Nx2DescribeIndices(ThreedClass engine, int firstIndex, int count)
+        {
+            ulong address = (ulong)engine.Read(0x17c8) << 32 | (uint)engine.Read(0x17cc);
+            int type = engine.Read(0x17d8);
+            int size = type == 0 ? 1 : type == 1 ? 2 : 4;
+            ulong start = address + (ulong)(firstIndex * size);
+
+            if (!_channel.MemoryManager.IsMapped(start))
+            {
+                return $"unmapped 0x{start:X} (type {type})";
+            }
+
+            ReadOnlySpan<byte> data = _channel.MemoryManager.GetSpan(start, count * size);
+            uint min = uint.MaxValue, max = 0;
+
+            for (int i = 0; i < count; i++)
+            {
+                uint value = size == 1 ? data[i] : size == 2 ? System.BitConverter.ToUInt16(data[(i * 2)..]) : System.BitConverter.ToUInt32(data[(i * 4)..]);
+
+                min = Math.Min(min, value);
+                max = Math.Max(max, value);
+            }
+
+            return $"0x{start:X} type {type} count {count} min {min} max {max}";
+        }
+
         private void DrawImpl(
             ThreedClass engine,
             int count,
@@ -585,6 +661,25 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             int firstInstance,
             bool indexed)
         {
+            if (Nx2PassDumper.Active)
+            {
+                GpuContext.Nx2LastDrawProgram = GpuContext.Nx2LastProgram;
+
+                Nx2PassDumper.Note($"draw {count} x{instanceCount} indexed {indexed} mesh {_drawState.Nx2MeshDraw} [{GpuContext.Nx2LastProgram}]");
+
+                if (Nx2PassDumper.IsTargetProgram(GpuContext.Nx2LastProgram))
+                {
+                    Nx2PassDumper.Note($"vertex input:{engine.Nx2DescribeVertexInput()} first index {firstIndex} first vertex {firstVertex} first instance {firstInstance}");
+
+                    if (indexed)
+                    {
+                        Nx2PassDumper.Note($"indices: {Nx2DescribeIndices(engine, firstIndex, count)}");
+                    }
+
+                    _channel.TextureManager.Nx2DumpGraphicsSamples("input");
+                }
+            }
+
             if (instanceCount > 1)
             {
                 _channel.BufferManager.SetInstancedDrawVertexCount(count);
@@ -613,6 +708,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     // avoids having to pass the draw manager instance.
                     ForceStateDirty();
                 }
+            }
+            else if (_drawState.Nx2MeshDraw)
+            {
+                // Task/mesh pipelines: the draw's vertex count is the number of task workgroups.
+                _context.Renderer.Pipeline.DrawMeshTasks(count, 1, 1);
             }
             else
             {

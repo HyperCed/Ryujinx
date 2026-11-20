@@ -120,6 +120,44 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
             return trace.ToString();
         }
 
+        public string Nx2DumpThreads()
+        {
+            EnsureLoaded();
+
+            StringBuilder sb = new();
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            string Describe(ulong address, KThread thread)
+            {
+                return AnalyzePointer(out PointerInfo info, address, thread) ? $"0x{address:x} {info.ImageDisplay} {info.SubDisplay}" : $"0x{address:x}";
+            }
+
+            foreach (KThread thread in _owner.Nx2SnapshotThreads())
+            {
+                double age = thread.Nx2SvcTime == 0 ? -1 : (now - thread.Nx2SvcTime) / (double)System.Diagnostics.Stopwatch.Frequency;
+
+                sb.AppendLine($"thread {thread.ThreadUid} '{thread.GetThreadName()}' prio {thread.DynamicPriority} core {thread.ActiveCore} state {thread.SchedFlags} svc 0x{thread.Nx2SvcId:x} {age:F2}s ago");
+                sb.AppendLine($"  x0-x7: {string.Join(' ', thread.Nx2SvcRegs.Select(x => x.ToString("x")))}");
+                sb.AppendLine($"  pc {Describe(thread.Nx2SvcPc, thread)}");
+                sb.AppendLine($"  lr {Describe(thread.Nx2SvcLr, thread)}");
+
+                ulong framePointer = thread.Nx2SvcFp;
+
+                for (int depth = 0; depth < 24 && framePointer != 0; depth++)
+                {
+                    if ((framePointer & 7) != 0 || !_owner.CpuMemory.IsMapped(framePointer) || !_owner.CpuMemory.IsMapped(framePointer + 8))
+                    {
+                        break;
+                    }
+
+                    sb.AppendLine($"    {Describe(_owner.CpuMemory.Read<ulong>(framePointer + 8), thread)}");
+                    framePointer = _owner.CpuMemory.Read<ulong>(framePointer);
+                }
+            }
+
+            return sb.ToString();
+        }
+
         public string GetCpuRegisterPrintout(KThread thread)
         {
             EnsureLoaded();

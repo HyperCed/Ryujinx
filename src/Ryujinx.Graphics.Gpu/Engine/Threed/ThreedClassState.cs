@@ -825,7 +825,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         public fixed uint Reserved33C[16];
         public Boolean32 RasterizeEnable;
         public Array4<TfBufferState> TfBufferState;
-        public fixed uint Reserved400[192];
+        public fixed uint Reserved400[128];
+
+        /// <summary>
+        /// Switch 2 (Turing and later): SET_VERTEX_STREAM_SIZE_A/B (0x600 + 8 * index), the byte size of each
+        /// vertex buffer (A bits 7:0 high, B low 32 bits), replacing Maxwell's end addresses at 0x1f00.
+        /// </summary>
+        public Array64<uint> Nx2VertexStreamSize;
         public Array4<TfState> TfState;
         public fixed uint Reserved740[1];
         public Boolean32 TfEnable;
@@ -882,7 +888,14 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         public int DrawTextureSrcY;
         public fixed uint Reserved10B0[18];
         public uint ClearFlags;
-        public fixed uint Reserved10FC[25];
+        public fixed uint Reserved10FC[20];
+
+        /// <summary>
+        /// Switch 2 (Ampere) task/mesh pipelines (clc597.h): SET_MESH_CONTROL (0x114c), SET_MESH_SHADER_A
+        /// (0x1150), SET_MESH_SHADER_B (0x1154), SET_MESH_INIT_SHADER (0x1158).
+        /// </summary>
+        public Array4<uint> Nx2MeshState;
+        public fixed uint Reserved115C[1];
         public Array32<VertexAttribState> VertexAttribState;
         public fixed uint Reserved11E0[13];
         public uint DrawVertexArrayBeginEndInstanceFirst;

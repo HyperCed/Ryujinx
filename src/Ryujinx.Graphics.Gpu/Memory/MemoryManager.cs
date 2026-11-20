@@ -77,6 +77,24 @@ namespace Ryujinx.Graphics.Gpu.Memory
             Physical.TextureCache.Initialize(cpuMemorySize);
         }
 
+        private ulong _syncpointShimVa;
+        private ulong _syncpointShimSize;
+        private Func<uint, uint> _syncpointShimRead;
+
+        /// <summary>
+        /// Places the Switch 2 read-only syncpoint shim: a GPU range whose u32 at id * 4 reads as that
+        /// syncpoint's value. It is not backed by guest memory.
+        /// </summary>
+        /// <param name="va">GPU virtual address of the shim</param>
+        /// <param name="count">Number of syncpoints the shim exposes</param>
+        /// <param name="read">Reads the current value of a syncpoint</param>
+        public void SetSyncpointShim(ulong va, uint count, Func<uint, uint> read)
+        {
+            _syncpointShimVa = va;
+            _syncpointShimSize = (ulong)count * sizeof(uint);
+            _syncpointShimRead = read;
+        }
+
         /// <summary>
         /// Reads data from GPU mapped memory.
         /// </summary>
@@ -87,6 +105,21 @@ namespace Ryujinx.Graphics.Gpu.Memory
         public T Read<T>(ulong va, bool tracked = false) where T : unmanaged
         {
             int size = Unsafe.SizeOf<T>();
+
+            if (_syncpointShimRead != null && va - _syncpointShimVa < _syncpointShimSize)
+            {
+                Span<byte> shimData = stackalloc byte[size];
+
+                for (int offset = 0; offset < size; offset++)
+                {
+                    ulong shimOffset = va - _syncpointShimVa + (ulong)offset;
+                    uint value = shimOffset < _syncpointShimSize ? _syncpointShimRead((uint)(shimOffset / sizeof(uint))) : 0;
+
+                    shimData[offset] = (byte)(value >> (int)((shimOffset & 3) * 8));
+                }
+
+                return MemoryMarshal.Cast<byte, T>(shimData)[0];
+            }
 
             if (IsContiguous(va, size))
             {
@@ -309,6 +342,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="writeCallback">Write callback</param>
         private void WriteImpl(ulong va, ReadOnlySpan<byte> data, WriteCallback writeCallback)
         {
+            GpuContext.Nx2RecordWrite(va, data);
+
             if (IsContiguous(va, data.Length))
             {
                 writeCallback(Translate(va), data);

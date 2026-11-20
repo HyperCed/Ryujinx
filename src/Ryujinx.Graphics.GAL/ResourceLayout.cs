@@ -25,6 +25,10 @@ namespace Ryujinx.Graphics.GAL
         TessellationEvaluation = 1 << 3,
         Geometry = 1 << 4,
         Fragment = 1 << 5,
+
+        // Switch 2 (NVN) task and mesh programs (VK_EXT_mesh_shader).
+        Task = 1 << 6,
+        Mesh = 1 << 7,
     }
 
     public readonly struct ResourceDescriptor : IEquatable<ResourceDescriptor>

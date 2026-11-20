@@ -134,6 +134,16 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
             return Result.Success;
         }
 
+        private static ulong _skippedFillPages;
+
+        // RYUJINX_ZERO_FILL_ALL=1: zero every page mapped zero-filled, as before (to compare).
+        private static readonly bool _fillAllPages = System.Environment.GetEnvironmentVariable("RYUJINX_ZERO_FILL_ALL") == "1";
+
+        /// <summary>
+        /// Pages mapped zero-filled whose fill was skipped since they were never used.
+        /// </summary>
+        public static ulong SkippedFillPages => _skippedFillPages;
+
         /// <inheritdoc/>
         protected override Result MapPages(
             ulong address,
@@ -156,7 +166,17 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
 
                 _cpuMemory.Map(currentVa, addr, size, flags);
 
-                if (shouldFillPages)
+                if (shouldFillPages && fillValue == 0 && !_fillAllPages)
+                {
+                    // Only pages that held data before need zeroing: writing fresh ones would commit them on
+                    // the host for nothing.
+                    ulong nodeVa = currentVa;
+                    ulong nodePa = pageNode.Address;
+
+                    _skippedFillPages += Context.MemoryManager.ForEachDirtyRange(nodePa, pageNode.PagesCount,
+                        (pa, pages) => _cpuMemory.Fill(nodeVa + (pa - nodePa), pages * PageSize, 0));
+                }
+                else if (shouldFillPages)
                 {
                     _cpuMemory.Fill(currentVa, size, fillValue);
                 }

@@ -85,6 +85,24 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
             return format;
         }
 
+        public static TextureFormat GetTextureFormatForImageStore(IGpuAccessor gpuAccessor, int handle, int cbufSlot = -1)
+        {
+            if (gpuAccessor.QueryHostSupportsImageStoreWithoutFormat())
+            {
+                return TextureFormat.Unknown;
+            }
+
+            TextureFormat format = gpuAccessor.QueryTextureFormat(handle, cbufSlot);
+
+            if (format == TextureFormat.Unknown)
+            {
+                gpuAccessor.Log($"Unknown format for image store {handle}.");
+                format = TextureFormat.R8G8B8A8Unorm;
+            }
+
+            return format;
+        }
+
         private static bool FormatSupportsAtomic(TextureFormat format)
         {
             return format is TextureFormat.R32Sint or TextureFormat.R32Uint;

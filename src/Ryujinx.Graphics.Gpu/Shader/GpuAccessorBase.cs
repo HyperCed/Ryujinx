@@ -41,9 +41,12 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// </summary>
         /// <param name="tfEnabled">Indicates if the current graphics shader is used with transform feedback enabled</param>
         /// <param name="vertexAsCompute">Indicates that the vertex shader will be emulated on a compute shader</param>
-        public void InitializeReservedCounts(bool tfEnabled, bool vertexAsCompute)
+        public void InitializeReservedCounts(bool tfEnabled, bool vertexAsCompute, bool nx2MeshAsCompute = false)
         {
-            ResourceReservationCounts rrc = new(!_context.Capabilities.SupportsTransformFeedback && tfEnabled, vertexAsCompute);
+            ResourceReservationCounts rrc = new(
+                !_context.Capabilities.SupportsTransformFeedback && tfEnabled,
+                vertexAsCompute,
+                nx2MeshAsCompute);
 
             _reservedConstantBuffers = rrc.ReservedConstantBuffers;
             _reservedStorageBuffers = rrc.ReservedStorageBuffers;
@@ -216,6 +219,8 @@ namespace Ryujinx.Graphics.Gpu.Shader
         public bool QueryHostSupportsGeometryShaderPassthrough() => _context.Capabilities.SupportsGeometryShaderPassthrough;
 
         public bool QueryHostSupportsImageLoadFormatted() => _context.Capabilities.SupportsImageLoadFormatted;
+
+        public bool QueryHostSupportsImageStoreWithoutFormat() => _context.Capabilities.SupportsImageStoreWithoutFormat;
 
         public bool QueryHostSupportsLayerVertexTessellation() => _context.Capabilities.SupportsLayerVertexTessellation;
 

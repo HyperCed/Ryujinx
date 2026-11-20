@@ -76,7 +76,17 @@ namespace Ryujinx.Graphics.Gpu.Synchronization
         }
 
         /// <inheritdoc/>
-        public bool WaitOnSyncpoint(uint id, uint threshold, TimeSpan timeout)
+        public bool WaitOnSyncpoint(uint id, uint threshold, TimeSpan timeout) => WaitOnSyncpoint(id, threshold, timeout, quiet: false);
+
+        /// <summary>
+        /// Waits on a syncpoint until it reaches a threshold.
+        /// </summary>
+        /// <param name="id">The id of the syncpoint</param>
+        /// <param name="threshold">The threshold to wait for</param>
+        /// <param name="timeout">The timeout</param>
+        /// <param name="quiet">True if a timeout is expected and should not be logged</param>
+        /// <returns>True if timed out</returns>
+        public bool WaitOnSyncpoint(uint id, uint threshold, TimeSpan timeout, bool quiet)
         {
             ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(id, (uint)MaxHardwareSyncpoints);
 
@@ -86,19 +96,31 @@ namespace Ryujinx.Graphics.Gpu.Synchronization
                 timeout = TimeSpan.FromSeconds(1);
             }
 
-            using ManualResetEvent waitEvent = new(false);
+            ManualResetEvent waitEvent = new(false);
             SyncpointWaiterHandle info = _syncpoints[id].RegisterCallback(threshold, _ => waitEvent.Set());
 
             if (info == null)
             {
+                waitEvent.Dispose();
+
                 return false;
             }
 
             bool signaled = waitEvent.WaitOne(timeout);
 
+            // On a timeout, an increment may still run the callback after it is unregistered,
+            // so the event is then left to the finalizer instead of being disposed under it.
+            if (signaled)
+            {
+                waitEvent.Dispose();
+            }
+
             if (!signaled)
             {
-                Logger.Error?.Print(LogClass.Gpu, $"Wait on syncpoint {id} for threshold {threshold} took more than {timeout.TotalMilliseconds}ms, resuming execution...");
+                if (!quiet)
+                {
+                    Logger.Error?.Print(LogClass.Gpu, $"Wait on syncpoint {id} for threshold {threshold} took more than {timeout.TotalMilliseconds}ms, resuming execution...");
+                }
 
                 _syncpoints[id].UnregisterCallback(info);
             }

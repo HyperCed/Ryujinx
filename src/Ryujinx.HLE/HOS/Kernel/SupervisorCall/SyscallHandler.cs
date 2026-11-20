@@ -29,6 +29,11 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
                 _context.CriticalSection.Leave();
             }
 
+            if (KThread.Nx2TraceSvcs && !context.IsAarch32)
+            {
+                currentThread.Nx2RecordSvc(context, address, id);
+            }
+
             if (context.IsAarch32)
             {
                 SyscallDispatch.Dispatch32(_context.Syscall, context, id);

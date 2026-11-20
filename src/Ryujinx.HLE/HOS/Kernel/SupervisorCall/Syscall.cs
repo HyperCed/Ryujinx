@@ -264,7 +264,8 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
 
             Result result = session.SendSyncRequest();
 
-            if (result != Result.Success)
+            // Closing a session replies with SessionClosed, which is not worth a warning.
+            if (result != Result.Success && result != KernelResult.PortRemoteClosed)
             {
                 Logger.Warning?.Print(LogClass.KernelSvc, $"SendSyncRequest for handle 0x{handle:X8} in process {currentProcess.Pid} returned {result}.");
             }
@@ -941,6 +942,41 @@ namespace Ryujinx.HLE.HOS.Kernel.SupervisorCall
             }
 
             return currentProcess.MemoryManager.SetMemoryPermission(address, size, permission);
+        }
+
+        [Svc(0x80)]
+        // Switch 2 only. nn::gpu::sdk and nn::gs native memory set the "GPU accessible" attribute before
+        // registering memory with the GPU and clear it on destruction; NVN can see it through QueryMemory.
+        public Result SetGpuMemoryAttribute(
+            [PointerSized] ulong address,
+            [PointerSized] ulong size,
+            MemoryAttribute attributeMask,
+            MemoryAttribute attributeValue)
+        {
+            if (!PageAligned(address))
+            {
+                return KernelResult.InvalidAddress;
+            }
+
+            if (!PageAligned(size) || size == 0)
+            {
+                return KernelResult.InvalidSize;
+            }
+
+            if ((attributeValue & ~attributeMask) != 0 ||
+                ((attributeMask | attributeValue) & ~MemoryAttribute.GpuAccessible) != 0)
+            {
+                return KernelResult.InvalidCombination;
+            }
+
+            KProcess process = KernelStatic.GetCurrentProcess();
+
+            if (!process.MemoryManager.InsideAddrSpace(address, size))
+            {
+                return KernelResult.InvalidMemState;
+            }
+
+            return process.MemoryManager.SetMemoryAttribute(address, size, attributeMask, attributeValue);
         }
 
         [Svc(3)]

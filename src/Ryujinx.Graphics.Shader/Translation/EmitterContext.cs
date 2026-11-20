@@ -342,11 +342,27 @@ namespace Ryujinx.Graphics.Shader.Translation
             PrepareForVertexReturn();
         }
 
+        /// <summary>
+        /// Label every EXIT of a Switch 2 task or mesh program jumps to, so all invocations reach the same
+        /// epilogue (it emits the outputs after a workgroup barrier).
+        /// </summary>
+        public Operand Nx2MeshExitLabel { get; private set; }
+
+        public bool IsNx2TaskOrMesh => TranslatorContext.Definitions.Stage is ShaderStage.Task or ShaderStage.Mesh;
+
         public bool PrepareForReturn()
         {
             if (IsNonMain)
             {
                 return true;
+            }
+
+            if (IsNx2TaskOrMesh)
+            {
+                Nx2MeshExitLabel ??= Label();
+                this.Branch(Nx2MeshExitLabel);
+
+                return false;
             }
 
             if (TranslatorContext.Definitions.LastInVertexPipeline &&

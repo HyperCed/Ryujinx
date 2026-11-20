@@ -120,6 +120,10 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             Add(Instruction.PackHalf2x16,             GeneratePackHalf2x16);
             Add(Instruction.ReciprocalSquareRoot,     GenerateReciprocalSquareRoot);
             Add(Instruction.Return,                   GenerateReturn);
+            Add(Instruction.Nx2IsbeRead,              (context, operation) => context.Nx2Mesh.GenerateIsbeRead(context, operation));
+            Add(Instruction.Nx2IsbeWrite,             (context, operation) => context.Nx2Mesh.GenerateIsbeWrite(context, operation));
+            Add(Instruction.Nx2MeshEpilogue,          (context, operation) => context.Nx2Mesh.GenerateEpilogue(context));
+            Add(Instruction.Nx2MeshPrologue,          (context, operation) => context.Nx2Mesh.GeneratePrologue(context));
             Add(Instruction.Round,                    GenerateRound);
             Add(Instruction.ShiftLeft,                GenerateShiftLeft);
             Add(Instruction.ShiftRightS32,            GenerateShiftRightS32);
@@ -658,6 +662,28 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
             SpvInstruction value = Src(componentType);
 
+            // Switch 2 surface reductions ignore coordinates out of bounds (Clamp IGN); Metal has no robust image
+            // access and faults on them: the atomic runs only for coordinates inside the image.
+            SpvInstruction nx2Before = null;
+            SpvInstruction nx2Then = null;
+            SpvInstruction nx2Merge = null;
+
+            if (context.Definitions.Nx2NativeProgram)
+            {
+                SpvInstruction loaded = context.Load(declaration.ImageType, image);
+                SpvInstruction inBounds = Nx2CoordinatesInBounds(context, loaded, pCoords, pCount);
+
+                nx2Before = context.Label();
+                nx2Then = context.Label();
+                nx2Merge = context.Label();
+
+                context.Branch(nx2Before);
+                context.AddLabel(nx2Before);
+                context.SelectionMerge(nx2Merge, SelectionControlMask.MaskNone);
+                context.BranchConditional(inBounds, nx2Then, nx2Merge);
+                context.AddLabel(nx2Then);
+            }
+
             SpvInstruction pointer = context.ImageTexelPointer(imagePointerType, image, pCoords, context.Constant(context.TypeU32(), 0));
             SpvInstruction one = context.Constant(context.TypeU32(), 1);
             SpvInstruction zero = context.Constant(context.TypeU32(), 0);
@@ -681,12 +707,40 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 _ => context.AtomicIAdd(resultType, pointer, one, zero, value),
             };
 
+            if (nx2Then != null)
+            {
+                context.Branch(nx2Merge);
+                context.AddLabel(nx2Merge);
+
+                result = context.Phi(resultType, result, nx2Then, context.ConstantNull(resultType), nx2Before);
+            }
+
             return new OperationResult(componentType, result);
+        }
+
+        /// <summary>
+        /// Whether integer image coordinates (array layer last) are inside the image.
+        /// </summary>
+        private static SpvInstruction Nx2CoordinatesInBounds(CodeGenContext context, SpvInstruction image, SpvInstruction coordinates, int count)
+        {
+            SpvInstruction signedType = count > 1 ? context.TypeVector(context.TypeS32(), count) : context.TypeS32();
+            SpvInstruction unsignedType = count > 1 ? context.TypeVector(context.TypeU32(), count) : context.TypeU32();
+            SpvInstruction boolType = count > 1 ? context.TypeVector(context.TypeBool(), count) : context.TypeBool();
+
+            SpvInstruction size = context.ImageQuerySize(signedType, image);
+            SpvInstruction less = context.ULessThan(boolType, context.Bitcast(unsignedType, coordinates), context.Bitcast(unsignedType, size));
+
+            return count > 1 ? context.All(context.TypeBool(), less) : less;
         }
 
         private static OperationResult GenerateImageLoad(CodeGenContext context, AstOperation operation)
         {
             AstTextureOperation texOp = (AstTextureOperation)operation;
+
+            if (texOp.Format == TextureFormat.Unknown)
+            {
+                context.AddCapability(Capability.StorageImageReadWithoutFormat);
+            }
 
             AggregateType componentType = texOp.Format.GetComponentType();
 
@@ -752,6 +806,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
         private static OperationResult GenerateImageStore(CodeGenContext context, AstOperation operation)
         {
             AstTextureOperation texOp = (AstTextureOperation)operation;
+
+            if (texOp.Format == TextureFormat.Unknown)
+            {
+                context.AddCapability(Capability.StorageImageWriteWithoutFormat);
+            }
 
             bool isArray = (texOp.Type & SamplerType.Array) != 0;
 
@@ -827,6 +886,23 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             }
 
             SpvInstruction texel = context.CompositeConstruct(context.TypeVector(context.GetType(componentType), ComponentsCount), cElems);
+
+            if (context.Definitions.Nx2NativeProgram)
+            {
+                // Switch 2 surface stores ignore coordinates out of bounds; Metal faults on them.
+                SpvInstruction inBounds = Nx2CoordinatesInBounds(context, image, pCoords, pCount);
+                SpvInstruction thenLabel = context.Label();
+                SpvInstruction mergeLabel = context.Label();
+
+                context.SelectionMerge(mergeLabel, SelectionControlMask.MaskNone);
+                context.BranchConditional(inBounds, thenLabel, mergeLabel);
+                context.AddLabel(thenLabel);
+                context.ImageWrite(image, pCoords, texel, ImageOperandsMask.MaskNone);
+                context.Branch(mergeLabel);
+                context.AddLabel(mergeLabel);
+
+                return OperationResult.Invalid;
+            }
 
             context.ImageWrite(image, pCoords, texel, ImageOperandsMask.MaskNone);
 
@@ -1044,6 +1120,12 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
         private static OperationResult GenerateReturn(CodeGenContext context, AstOperation operation)
         {
             context.MayHaveReturned = true;
+
+            if (context.Nx2BlockTerminated)
+            {
+                // OpEmitMeshTasksEXT ended the block.
+                return OperationResult.Invalid;
+            }
 
             if (operation.SourcesCount != 0)
             {
@@ -1716,7 +1798,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                         : context.Properties.StorageBuffers[bindingIndex.Value];
                     StructureField field = buffer.Type.Fields[fieldIndex.Value];
 
-                    storageClass = StorageClass.Uniform;
+                    storageClass = storageKind == StorageKind.StorageBuffer && context.Nx2UsesMeshShader ? StorageClass.StorageBuffer : StorageClass.Uniform;
                     varType = field.Type & AggregateType.ElementTypeMask;
                     baseObj = storageKind == StorageKind.ConstantBuffer
                         ? context.ConstantBuffers[bindingIndex.Value]
@@ -1801,6 +1883,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                     varType &= AggregateType.ElementTypeMask;
 
                     storageClass = isOutput ? StorageClass.Output : StorageClass.Input;
+
+                    if (!isOutput && context.Nx2Mesh != null && Nx2MeshCodeGen.IsEmulatedSubgroupInput(ioVariable))
+                    {
+                        storageClass = StorageClass.Private;
+                    }
 
                     IoDefinition ioDefinition = new(storageKind, ioVariable, location, component);
                     Dictionary<IoDefinition, SpvInstruction> dict = isPerPatch

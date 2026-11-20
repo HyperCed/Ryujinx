@@ -196,7 +196,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
 
                 case ProcessCreationFlags.AddressSpace64BitDeprecated:
                     aliasRegion.Size = 0x180000000;
-                    heapRegion.Size = memConfig == MemoryConfiguration.MemoryConfiguration12GiB ? 0x300000000u : 0x180000000u;
+                    heapRegion.Size = memConfig is MemoryConfiguration.MemoryConfiguration12GiB or MemoryConfiguration.MemoryConfiguration16GiB or MemoryConfiguration.MemoryConfiguration32GiB ? 0x300000000u : 0x180000000u;
                     stackRegion.Size = 0;
                     tlsIoRegion.Size = 0;
                     CodeRegionStart = 0x8000000;
@@ -226,7 +226,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
                         int addressSpaceWidth = (int)ulong.Log2(_reservedAddressSpaceSize);
 
                         aliasRegion.Size = 1UL << (addressSpaceWidth - 3);
-                        heapRegion.Size = memConfig == MemoryConfiguration.MemoryConfiguration12GiB ? 0x300000000u : 0x180000000u;
+                        heapRegion.Size = memConfig is MemoryConfiguration.MemoryConfiguration12GiB or MemoryConfiguration.MemoryConfiguration16GiB or MemoryConfiguration.MemoryConfiguration32GiB ? 0x300000000u : 0x180000000u;
                         stackRegion.Size = 1UL << (addressSpaceWidth - 8);
                         tlsIoRegion.Size = 1UL << (addressSpaceWidth - 3);
                         CodeRegionStart = BitUtils.AlignDown(address, RegionAlignment);
@@ -240,7 +240,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
                     else
                     {
                         aliasRegion.Size = 0x1000000000;
-                        heapRegion.Size = memConfig == MemoryConfiguration.MemoryConfiguration12GiB ? 0x300000000u : 0x180000000u;
+                        heapRegion.Size = memConfig is MemoryConfiguration.MemoryConfiguration12GiB or MemoryConfiguration.MemoryConfiguration16GiB or MemoryConfiguration.MemoryConfiguration32GiB ? 0x300000000u : 0x180000000u;
                         stackRegion.Size = 0x80000000;
                         tlsIoRegion.Size = 0x1000000000;
                         CodeRegionStart = BitUtils.AlignDown(address, RegionAlignment);
@@ -567,6 +567,106 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
                 {
                     result = AllocateAndMapPages(address, pagesCount, permission);
                 }
+
+                if (result != Result.Success)
+                {
+                    return result;
+                }
+
+                _blockManager.InsertBlock(address, pagesCount, state, permission);
+            }
+
+            return Result.Success;
+        }
+
+        public Result MapPages(
+            KPageList pageList,
+            int alignment,
+            ulong regionStart,
+            ulong regionPagesCount,
+            MemoryState state,
+            KMemoryPermission permission,
+            out ulong address)
+        {
+            address = 0;
+
+            ulong pagesCount = pageList.GetPagesCount();
+            ulong regionSize = regionPagesCount * PageSize;
+
+            if (!CanContain(regionStart, regionSize, state))
+            {
+                return KernelResult.InvalidMemState;
+            }
+
+            if (regionPagesCount <= pagesCount)
+            {
+                return KernelResult.OutOfMemory;
+            }
+
+            lock (_blockManager)
+            {
+                address = AllocateVa(regionStart, regionPagesCount, pagesCount, alignment);
+
+                if (address == 0)
+                {
+                    return KernelResult.OutOfMemory;
+                }
+
+                if (!_slabManager.CanAllocate(MaxBlocksNeededForInsertion))
+                {
+                    return KernelResult.OutOfResource;
+                }
+
+                Result result = MapPages(address, pageList, permission, MemoryMapFlags.Private);
+
+                if (result != Result.Success)
+                {
+                    return result;
+                }
+
+                _blockManager.InsertBlock(address, pagesCount, state, permission);
+            }
+
+            return Result.Success;
+        }
+
+        /// <summary>
+        /// Maps physical pages that need not be contiguous at a free address of a region (zeroing the pages
+        /// used before). The mapping takes over the page list's references.
+        /// </summary>
+        public Result MapPageList(
+            KPageList pageList,
+            int alignment,
+            ulong regionStart,
+            ulong regionPagesCount,
+            MemoryState state,
+            KMemoryPermission permission,
+            out ulong address)
+        {
+            address = 0;
+
+            ulong pagesCount = pageList.GetPagesCount();
+
+            if (!CanContain(regionStart, regionPagesCount * PageSize, state))
+            {
+                return KernelResult.InvalidMemState;
+            }
+
+            lock (_blockManager)
+            {
+                address = AllocateVa(regionStart, regionPagesCount, pagesCount, alignment);
+
+                if (address == 0)
+                {
+                    return KernelResult.OutOfMemory;
+                }
+
+                if (!_slabManager.CanAllocate(MaxBlocksNeededForInsertion))
+                {
+                    return KernelResult.OutOfResource;
+                }
+
+                Result result = MapPages(address, pageList, permission, MemoryMapFlags.Private, true, 0);
 
                 if (result != Result.Success)
                 {
@@ -960,7 +1060,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
                     KMemoryPermission.None,
                     MemoryAttribute.BorrowedAndIpcMapped,
                     MemoryAttribute.None,
-                    MemoryAttribute.DeviceMappedAndUncached,
+                    MemoryAttribute.DeviceMappedAndUncached | MemoryAttribute.GpuAccessible,
                     out MemoryState state,
                     out KMemoryPermission permission,
                     out MemoryAttribute attribute))

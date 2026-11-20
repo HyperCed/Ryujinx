@@ -435,6 +435,8 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostChannel
 
             header.Fence.Id = _channelSyncpoint.Id;
 
+            uint nx2IncrementCount = header.Flags.HasFlag(SubmitGpfifoFlags.IncrementWithValue) ? header.Fence.Value : 0;
+
             if (header.Flags.HasFlag(SubmitGpfifoFlags.FenceIncrement) || header.Flags.HasFlag(SubmitGpfifoFlags.IncrementWithValue))
             {
                 uint incrementCount = header.Flags.HasFlag(SubmitGpfifoFlags.FenceIncrement) ? 2u : 0u;
@@ -456,6 +458,13 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostChannel
             if (header.Flags.HasFlag(SubmitGpfifoFlags.FenceIncrement))
             {
                 Channel.PushHostCommandBuffer(CreateIncrementCommandBuffer(ref header.Fence, header.Flags));
+            }
+            else if (Nx2Driver.Active && nx2IncrementCount != 0)
+            {
+                // Switch 2 pushbuffers signal completion with semaphore releases, never host1x syncpoint
+                // methods, but the driver still has the kernel raise the syncpoint max by the submission's
+                // increment value and then waits for that value. Append the increments after its commands.
+                Channel.PushHostCommandBuffer(CreateNx2IncrementCommandBuffer(header.Fence.Id, nx2IncrementCount));
             }
 
             header.Flags = SubmitGpfifoFlags.None;
@@ -500,6 +509,29 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvHostChannel
             // SyncpointAction(fence.id, increment: false, switch_en: true);
             commandBuffer[2] = 0x2001001D;
             commandBuffer[3] = (((int)fence.Id << 8) | (0 << 0) | (1 << 4));
+
+            return commandBuffer;
+        }
+
+        private static int[] CreateNx2IncrementCommandBuffer(uint syncpointId, uint count)
+        {
+            int[] commandBuffer = new int[4 + count * 2];
+            int offset = 0;
+
+            // WaitForInterrupt(handle)
+            commandBuffer[offset++] = 0x2001001E;
+            commandBuffer[offset++] = 0x0;
+
+            // SyncpointValue = 0x0;
+            commandBuffer[offset++] = 0x2001001C;
+            commandBuffer[offset++] = 0x0;
+
+            for (uint i = 0; i < count; i++)
+            {
+                // SyncpointAction(fence.id, increment: true, switch_en: false);
+                commandBuffer[offset++] = 0x2001001D;
+                commandBuffer[offset++] = ((int)syncpointId << 8) | (1 << 0);
+            }
 
             return commandBuffer;
         }

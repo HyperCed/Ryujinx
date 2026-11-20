@@ -14,6 +14,11 @@ namespace Ryujinx.Graphics.Shader.Translation
         public HashSet<int> NextUsedInputAttributesPerPatch { get; private set; }
         public int PassthroughAttributes { get; private set; }
         private int _nextUsedInputAttributes;
+
+        /// <summary>
+        /// Generic attributes the next stage reads.
+        /// </summary>
+        public int NextUsedInputAttributes => _nextUsedInputAttributes;
         private int _thisUsedInputAttributes;
         private Dictionary<int, int> _perPatchAttributeLocations;
         private readonly IGpuAccessor _gpuAccessor;

@@ -24,7 +24,8 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                     {
                         bool isWorthPropagating = propVar.Uses.Count == 1 || IsWorthPropagating(assignment.Source);
 
-                        if (propVar.Defs.Count == 1 && isWorthPropagating)
+                        // Call arguments stay variables: SPIR-V passes them by pointer.
+                        if (propVar.Defs.Count == 1 && isWorthPropagating && !IsCallArgument(propVar))
                         {
                             PropagateExpression(propVar, assignment.Source);
                         }
@@ -40,6 +41,19 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
             }
 
             RemoveEmptyBlocks(mainBlock);
+        }
+
+        private static bool IsCallArgument(AstOperand propVar)
+        {
+            foreach (IAstNode use in propVar.Uses)
+            {
+                if (use is AstOperation operation && operation.Inst == Instruction.Call)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool IsWorthPropagating(IAstNode source)

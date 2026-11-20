@@ -5,7 +5,9 @@ namespace Ryujinx.Cpu.AppleHv
     class HvIpaAllocator
     {
         private const ulong AllocationGranule = 1UL << 14;
-        private const ulong IpaRegionSize = 1UL << 35;
+        // The default VM (hv_vm_create without a configuration) has a 36-bit IPA space: room for a 32 GiB
+        // DRAM (MemoryConfiguration32GiB) next to the page tables.
+        private const ulong IpaRegionSize = 1UL << 36;
 
         private readonly PrivateMemoryAllocator.Block _block;
 

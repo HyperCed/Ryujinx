@@ -32,8 +32,12 @@ namespace Ryujinx.Cpu.Jit.HostTracked
 
         public nint PageTablePointer => _nativePageTable.Pointer;
 
-        public NativePageTable(ulong asSize)
+        private readonly InvalidAccessHandler _invalidAccessHandler;
+
+        public NativePageTable(ulong asSize, InvalidAccessHandler invalidAccessHandler = null)
         {
+            _invalidAccessHandler = invalidAccessHandler;
+
             ulong hostPageSize = MemoryBlock.GetPageSize();
 
             _entriesPerPtPage = (int)(hostPageSize / sizeof(ulong));
@@ -195,7 +199,7 @@ namespace Ryujinx.Cpu.Jit.HostTracked
             }
             else
             {
-                throw new InvalidMemoryRegionException();
+                throw new InvalidMemoryRegionException($"Guest access outside the address space: page table offset 0x{address:X} (va 0x{address * (PageSize / sizeof(ulong)):X}), write={write}");
             }
         }
 

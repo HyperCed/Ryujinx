@@ -1,3 +1,4 @@
+using Ryujinx.Common.Logging;
 using Ryujinx.Graphics.Device;
 using Ryujinx.Graphics.Gpu.Engine.MME;
 using Ryujinx.Graphics.Gpu.Synchronization;
@@ -51,6 +52,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             _macroCode = new int[MacroCodeSize];
         }
 
+        private int _nx2UnmappedSemaphores;
+
+        /// <summary>
+        /// Switch 2: the semaphore acquire the channel is suspended on, if any.
+        /// </summary>
+        public Nx2PendingAcquire? Nx2PendingAcquire { get; set; }
+
         /// <summary>
         /// Create any syncs from WaitForIdle command that are currently pending.
         /// </summary>
@@ -90,6 +98,35 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
 
             SemaphoredOperation operation = _state.State.SemaphoredOperation;
 
+            if (_context.Nx2Ampere)
+            {
+                if (!_parent.MemoryManager.IsMapped(address))
+                {
+                    if (_nx2UnmappedSemaphores++ < 16)
+                    {
+                        Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 semaphore operation {operation} on unmapped address 0x{address:X}");
+                    }
+
+                    return;
+                }
+
+                if (operation is SemaphoredOperation.Acquire or SemaphoredOperation.AcqGeq or SemaphoredOperation.AcqAnd)
+                {
+                    // NVN2 gates each command buffer with an acquire the CPU releases after writing it:
+                    // reading past an unmet one runs stale commands. The channel is suspended instead.
+                    Nx2PendingAcquire acquire = new(address, (uint)value, operation);
+                    GpuContext.Nx2RecordSemaphore("acquire", address, (uint)value);
+                    GpuContext.Nx2WatchSemaphore(address, $"channel acquire {operation} 0x{value:x} (now 0x{_parent.MemoryManager.Read<uint>(address):x})");
+
+                    if (!acquire.IsMet(_parent.MemoryManager))
+                    {
+                        Nx2PendingAcquire = acquire;
+                    }
+
+                    return;
+                }
+            }
+
             if (_state.State.SemaphoredReleaseSize == SemaphoredReleaseSize.SixteenBytes)
             {
                 _parent.MemoryManager.Write(address + 4, 0);
@@ -100,42 +137,62 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             if (operation == SemaphoredOperation.Release)
             {
                 _parent.MemoryManager.Write(address, value);
+
+                if (_context.Nx2Ampere)
+                {
+                    _context.Nx2NoteDirectRelease(address);
+                }
             }
             else if (operation == SemaphoredOperation.Reduction)
             {
                 bool signed = _state.State.SemaphoredFormat == SemaphoredFormat.Signed;
+                SemaphoredReduction reduction = _state.State.SemaphoredReduction;
+                int payload = value;
 
-                int mem = _parent.MemoryManager.Read<int>(address);
-
-                switch (_state.State.SemaphoredReduction)
+                int Reduce(int mem)
                 {
-                    case SemaphoredReduction.Min:
-                        value = signed ? Math.Min(mem, value) : (int)Math.Min((uint)mem, (uint)value);
-                        break;
-                    case SemaphoredReduction.Max:
-                        value = signed ? Math.Max(mem, value) : (int)Math.Max((uint)mem, (uint)value);
-                        break;
-                    case SemaphoredReduction.Xor:
-                        value ^= mem;
-                        break;
-                    case SemaphoredReduction.And:
-                        value &= mem;
-                        break;
-                    case SemaphoredReduction.Or:
-                        value |= mem;
-                        break;
-                    case SemaphoredReduction.Add:
-                        value += mem;
-                        break;
-                    case SemaphoredReduction.Inc:
-                        value = (uint)mem < (uint)value ? mem + 1 : 0;
-                        break;
-                    case SemaphoredReduction.Dec:
-                        value = (uint)mem > 0 && (uint)mem <= (uint)value ? mem - 1 : value;
-                        break;
+                    return reduction switch
+                    {
+                        SemaphoredReduction.Min => signed ? Math.Min(mem, payload) : (int)Math.Min((uint)mem, (uint)payload),
+                        SemaphoredReduction.Max => signed ? Math.Max(mem, payload) : (int)Math.Max((uint)mem, (uint)payload),
+                        SemaphoredReduction.Xor => payload ^ mem,
+                        SemaphoredReduction.And => payload & mem,
+                        SemaphoredReduction.Or => payload | mem,
+                        SemaphoredReduction.Add => payload + mem,
+                        SemaphoredReduction.Inc => (uint)mem < (uint)payload ? mem + 1 : 0,
+                        SemaphoredReduction.Dec => (uint)mem > 0 && (uint)mem <= (uint)payload ? mem - 1 : payload,
+                        _ => payload,
+                    };
                 }
 
+                int memValue = _parent.MemoryManager.Read<int>(address);
+
+                value = Reduce(memValue);
+
                 _parent.MemoryManager.Write(address, value);
+
+                if (_context.Nx2Ampere)
+                {
+                    _context.Nx2NoteCombinedRelease(address, (uint)memValue, (uint)value, current => (uint)Reduce((int)current));
+                }
+            }
+
+            if (_context.Nx2Ampere)
+            {
+                GpuContext.Nx2RecordSemaphore("release", address, (uint)value);
+                GpuContext.Nx2WatchSemaphore(address, $"channel {operation} 0x{(uint)value:x}");
+            }
+
+            if (operation is SemaphoredOperation.Release or SemaphoredOperation.Reduction)
+            {
+                // Switch 2 queues release progress to the second page of a semaphore region and wait
+                // (GPU acquire and CPU poll) on the same offset in the first.
+                _context.Nx2WriteMirror(_parent.MemoryManager, address, (uint)value);
+            }
+
+            if (_context.Nx2Ampere)
+            {
+                _context.GPFifo.Nx2OnSemaphoreWritten();
             }
         }
 

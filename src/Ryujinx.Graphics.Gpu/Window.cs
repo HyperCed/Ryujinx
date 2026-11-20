@@ -138,6 +138,8 @@ namespace Ryujinx.Graphics.Gpu
             Action<object> releaseCallback,
             object userObj)
         {
+            Nx2PassDumper.OnPresent();
+
             if (!_context.PhysicalMemoryRegistry.TryGetValue(pid, out PhysicalMemory physicalMemory))
             {
                 return false;
@@ -193,6 +195,11 @@ namespace Ryujinx.Graphics.Gpu
         /// If the queue is empty, then no texture is presented.
         /// </summary>
         /// <param name="swapBuffersCallback">Callback method to call when a new texture should be presented on the screen</param>
+        private int _presentTraces;
+        private int _presentStats;
+        private static readonly string _nx2PresentDump = Environment.GetEnvironmentVariable("RYUJINX_PRESENT_DUMP");
+        private bool _presentDumped;
+
         public void Present(Action swapBuffersCallback)
         {
             _context.AdvanceSequence();
@@ -203,7 +210,88 @@ namespace Ryujinx.Graphics.Gpu
 
                 Image.Texture texture = pt.Cache.FindOrCreateTexture(null, TextureSearchFlags.WithUpscale, pt.Info, 0, range: pt.Range);
 
+                if (GpuContext.Nx2PresentTrace)
+                {
+                    GpuContext.Nx2PresentedAddress = pt.Range.GetSubRange(0).Address;
+                }
+
+                if (GpuContext.Nx2PresentTrace && _presentTraces++ < 8)
+                {
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Present: wanted {pt.Info.Width}x{pt.Info.Height} {pt.Info.FormatInfo.Format} gobs {pt.Info.GobBlocksInY} at {pt.Range}; got {texture.Info.Width}x{texture.Info.Height} {texture.Info.FormatInfo.Format} gobs {texture.Info.GobBlocksInY} linear {texture.Info.IsLinear} scale {texture.ScaleFactor} texture #{texture.GetHashCode():x}");
+                }
+
                 pt.Cache.Tick();
+
+                if (GpuContext.Nx2PresentTrace && _presentStats % 300 == 149)
+                {
+                    lock (GpuContext.Nx2RecentTargets)
+                    {
+                        foreach ((ulong address, (WeakReference<Image.Texture> reference, int binds)) in GpuContext.Nx2RecentTargets)
+                        {
+                            if (!reference.TryGetTarget(out Image.Texture target) || target.HostTexture == null)
+                            {
+                                continue;
+                            }
+
+                            using GAL.PinnedSpan<byte> targetData = target.HostTexture.GetData();
+                            System.ReadOnlySpan<byte> targetBytes = targetData.Get();
+                            int stride = Math.Max(4, targetBytes.Length / 4096) & ~3;
+                            int nonZeroSamples = 0, samples = 0;
+
+                            for (int i = 0; i + 3 < targetBytes.Length; i += stride)
+                            {
+                                samples++;
+                                nonZeroSamples += targetBytes[i] != 0 || targetBytes[i + 1] != 0 || targetBytes[i + 2] != 0 || targetBytes[i + 3] != 0 ? 1 : 0;
+                            }
+
+                            Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Present: target 0x{address:X} {target.Info.Width}x{target.Info.Height} {target.Info.FormatInfo.Format}, bound {binds} times: {nonZeroSamples}/{samples} non-zero samples");
+                        }
+
+                        GpuContext.Nx2RecentTargets.Clear();
+                    }
+                }
+
+                if (GpuContext.Nx2PresentTrace && _presentStats++ % 300 == 150)
+                {
+                    using GAL.PinnedSpan<byte> data = texture.HostTexture.GetData();
+                    System.ReadOnlySpan<byte> bytes = data.Get();
+                    int nonZero = 0;
+                    long sum = 0;
+
+                    for (int i = 0; i + 3 < bytes.Length; i += 64)
+                    {
+                        nonZero += bytes[i] != 0 || bytes[i + 1] != 0 || bytes[i + 2] != 0 ? 1 : 0;
+                        sum += bytes[i] + bytes[i + 1] + bytes[i + 2];
+                    }
+
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Present: texture #{texture.GetHashCode():x} content: {nonZero} of {bytes.Length / 64} sampled pixels non-black, mean {(double)sum / 3 / Math.Max(1, bytes.Length / 64):F1}, bytes {bytes.Length}");
+
+                    if (_nx2PresentDump != null && !_presentDumped)
+                    {
+                        _presentDumped = true;
+                        int width = texture.Info.Width;
+                        int height = texture.Info.Height;
+
+                        if (bytes.Length == (long)width * height * 4)
+                        {
+                            byte[] ppm = new byte[bytes.Length / 4 * 3 + 32];
+                            int headerLength = System.Text.Encoding.ASCII.GetBytes($"P6\n{width} {height}\n255\n", ppm);
+
+                            for (int source = 0, destination = headerLength; source < bytes.Length; source += 4)
+                            {
+                                ppm[destination++] = bytes[source];
+                                ppm[destination++] = bytes[source + 1];
+                                ppm[destination++] = bytes[source + 2];
+                            }
+
+                            System.IO.File.WriteAllBytes(_nx2PresentDump, ppm.AsSpan(0, headerLength + width * height * 3).ToArray());
+                        }
+                        else
+                        {
+                            Ryujinx.Common.Logging.Logger.Warning?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Present dump skipped: expected RGBA8 data for {width}x{height}, got {bytes.Length} bytes");
+                        }
+                    }
+                }
 
                 texture.SynchronizeMemory();
 

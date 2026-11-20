@@ -7,6 +7,7 @@ using Ryujinx.Graphics.Gpu.Memory;
 using Ryujinx.Graphics.Gpu.Shader;
 using Ryujinx.Graphics.Gpu.Synchronization;
 using System;
+using System.Linq;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
@@ -40,6 +41,401 @@ namespace Ryujinx.Graphics.Gpu
         /// GPU synchronization manager.
         /// </summary>
         public SynchronizationManager Synchronization { get; }
+
+        /// <summary>
+        /// True once a Switch 2 NVIDIA driver identified itself. Its channels bind Ampere classes and drive
+        /// 3D and compute state through Turing MME64 macros, which the Maxwell engines can't run.
+        /// </summary>
+        public bool Nx2Ampere
+        {
+            get => _nx2Ampere;
+            set
+            {
+                _nx2Ampere = value;
+
+                // Switch 2 GPUs swap two bits inside every GOB of block-linear images.
+                Ryujinx.Graphics.Texture.LayoutConverter.NativeTiling = value;
+            }
+        }
+
+        private bool _nx2Ampere;
+
+        /// <summary>
+        /// Switch 2 compute launch scheduling, shared by every channel.
+        /// </summary>
+        internal Engine.Nx2.Nx2QmdScheduler Nx2Qmd { get; } = new();
+
+        /// <summary>
+        /// The 3D engines of the Switch 2 channels (Maxwell forwarding mode). A QMD can be dispatched
+        /// while another channel still holds deferred (instanced) draws, which run later with the host
+        /// pipeline state as it is then: they are performed before the compute program is bound.
+        /// </summary>
+        internal System.Collections.Generic.List<WeakReference<Engine.Threed.ThreedClass>> Nx2ThreedEngines { get; } = [];
+
+        internal void Nx2PerformAllDeferredDraws()
+        {
+            lock (Nx2ThreedEngines)
+            {
+                for (int i = Nx2ThreedEngines.Count - 1; i >= 0; i--)
+                {
+                    if (Nx2ThreedEngines[i].TryGetTarget(out Engine.Threed.ThreedClass engine))
+                    {
+                        engine.PerformDeferredDraws();
+                    }
+                    else
+                    {
+                        Nx2ThreedEngines.RemoveAt(i);
+                    }
+                }
+            }
+        }
+
+
+        private readonly System.Collections.Generic.HashSet<ulong> _nx2SemaphoreRegions = [];
+
+        /// <summary>
+        /// Registers a two-page Switch 2 queue semaphore region: GPU releases go to the second page, and
+        /// the CPU and GPU waits read the same offset in the first.
+        /// </summary>
+        /// <param name="address">GPU virtual address of the region</param>
+        private readonly Dictionary<ulong, ulong> _nx2GpuOnlyRegions = new();
+
+        /// <summary>
+        /// RYUJINX_NX2_ALLOC_TRACE=1: logs buffers and textures of 32 MiB or more as they are created.
+        /// </summary>
+        internal static readonly bool Nx2AllocationTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_ALLOC_TRACE") == "1";
+
+        /// <summary>
+        /// Registers a Switch 2 GPU-only (or sparse) region the graphics server backs: the CPU never writes it,
+        /// so textures created there start from zero instead of loading (and committing) its memory.
+        /// </summary>
+        public void Nx2AddGpuOnlyRegion(ulong address, ulong size)
+        {
+            lock (_nx2GpuOnlyRegions)
+            {
+                _nx2GpuOnlyRegions[address] = size;
+            }
+        }
+
+        public void Nx2RemoveGpuOnlyRegion(ulong address)
+        {
+            lock (_nx2GpuOnlyRegions)
+            {
+                _nx2GpuOnlyRegions.Remove(address);
+            }
+        }
+
+        /// <summary>
+        /// Whether a GPU range lies in a backed Switch 2 GPU-only region.
+        /// </summary>
+        internal bool Nx2IsGpuOnly(ulong address, ulong size)
+        {
+            lock (_nx2GpuOnlyRegions)
+            {
+                foreach ((ulong start, ulong regionSize) in _nx2GpuOnlyRegions)
+                {
+                    if (address >= start && address - start < regionSize && size <= regionSize - (address - start))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        public void Nx2AddSemaphoreRegion(ulong address)
+        {
+            lock (_nx2SemaphoreRegions)
+            {
+                _nx2SemaphoreRegions.Add(address);
+            }
+        }
+
+        /// <summary>
+        /// Unregisters a Switch 2 queue semaphore region.
+        /// </summary>
+        /// <param name="address">GPU virtual address of the region</param>
+        public void Nx2RemoveSemaphoreRegion(ulong address)
+        {
+            lock (_nx2SemaphoreRegions)
+            {
+                _nx2SemaphoreRegions.Remove(address);
+            }
+        }
+
+        /// <summary>
+        /// Gets the address a semaphore release has to be mirrored to, if it lands on the second page of a
+        /// Switch 2 queue semaphore region.
+        /// </summary>
+        /// <param name="address">GPU virtual address of the release</param>
+        /// <param name="mirror">GPU virtual address of the mirror</param>
+        /// <returns>True if the release has a mirror</returns>
+        private static readonly ulong _nx2SemaphoreWatch = ulong.TryParse(Environment.GetEnvironmentVariable("RYUJINX_NX2_SEM_WATCH"), System.Globalization.NumberStyles.HexNumber, null, out ulong watch) ? watch & ~0xfUL : 0;
+
+        /// <summary>
+        /// RYUJINX_NX2_SEM_WATCH=&lt;hex GPU address&gt;: logs every Switch 2 semaphore operation on the 16 bytes there.
+        /// </summary>
+        private struct Nx2SemaphoreEvent
+        {
+            public int Channel;
+            public ulong Address;
+            public uint Value;
+            public ulong Qmd;
+            public string Kind;
+        }
+
+        private static readonly Nx2SemaphoreEvent[] _nx2SemaphoreEvents = new Nx2SemaphoreEvent[512];
+        private static int _nx2SemaphoreEventIndex;
+
+        /// <summary>
+        /// Records a Switch 2 semaphore operation in a ring of recent ones, cheaply, for stall reports.
+        /// </summary>
+        internal static void Nx2RecordSemaphore(string kind, ulong address, uint value, ulong qmd = 0)
+        {
+            if (kind == "acquire" && _nx2AcquiredAddresses.TryAdd(address, 0))
+            {
+                _nx2AcquiredList = [.. _nx2AcquiredAddresses.Keys];
+            }
+
+            int index = Interlocked.Increment(ref _nx2SemaphoreEventIndex) & (_nx2SemaphoreEvents.Length - 1);
+
+            _nx2SemaphoreEvents[index] = new Nx2SemaphoreEvent { Channel = Nx2CurrentChannel, Address = address, Value = value, Qmd = qmd, Kind = kind };
+        }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _nx2AcquiredAddresses = new();
+
+        private static volatile ulong[] _nx2AcquiredList = [];
+
+        /// <summary>
+        /// Records a plain GPU write (any engine: DMA, inline-to-memory, 3D reports...) in the ring if it
+        /// covers a word channels acquire on, with the phase of the GPU thread that wrote it.
+        /// </summary>
+        internal static void Nx2RecordWrite(ulong va, ReadOnlySpan<byte> data)
+        {
+            if (_nx2SemaphoreWatch != 0 && _nx2SemaphoreWatch + 16 > va && _nx2SemaphoreWatch < va + (ulong)data.Length)
+            {
+                int offset = (int)Math.Max(0, (long)_nx2SemaphoreWatch - (long)va);
+                ReadOnlySpan<byte> words = data.Slice(offset, Math.Min(16, data.Length - offset));
+                string text = Convert.ToHexString(words);
+
+                Nx2WatchWrite(va, (ulong)data.Length, () => $"GPU write [{Nx2Phase}] channel {Nx2CurrentChannel:x} bytes {text} from {string.Join(" < ", Environment.StackTrace.Split('\n')[4..10].Select(l => l.Trim().Split(" in ")[0].Replace("at Ryujinx.Graphics.Gpu.", "")))}");
+            }
+
+            ulong[] acquired = _nx2AcquiredList;
+
+            if (acquired.Length == 0)
+            {
+                return;
+            }
+
+            foreach (ulong address in acquired)
+            {
+                if (address >= va && address + 4 <= va + (ulong)data.Length)
+                {
+                    uint value = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(data[(int)(address - va)..]);
+
+                    Nx2RecordSemaphore($"write[{Nx2Phase}]", address, value);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The recent semaphore operations on <paramref name="address"/> (or all if 0), oldest first.
+        /// </summary>
+        internal static string Nx2DescribeSemaphores(ulong address, int count)
+        {
+            System.Collections.Generic.List<string> lines = [];
+            int last = _nx2SemaphoreEventIndex;
+
+            for (int i = 0; i < _nx2SemaphoreEvents.Length && lines.Count < count; i++)
+            {
+                Nx2SemaphoreEvent e = _nx2SemaphoreEvents[(last - i) & (_nx2SemaphoreEvents.Length - 1)];
+
+                if (e.Kind != null && (address == 0 || e.Address == address))
+                {
+                    lines.Add($"{e.Channel:x} {e.Kind} 0x{e.Address:X}={e.Value:x}{(e.Qmd != 0 ? $" qmd 0x{e.Qmd:X}" : "")}");
+                }
+            }
+
+            lines.Reverse();
+
+            return string.Join("; ", lines);
+        }
+
+        internal static void Nx2WatchSemaphore(ulong address, string operation)
+        {
+            if (_nx2SemaphoreWatch != 0 && (address & ~0xfUL) == _nx2SemaphoreWatch)
+            {
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Semaphore watch 0x{address:X}: channel {Nx2CurrentChannel:x} [{Nx2Phase}] {operation}");
+            }
+        }
+
+        /// <summary>
+        /// Logs a Switch 2 write of [address, address + size) that covers the watched address.
+        /// </summary>
+        internal static void Nx2WatchWrite(ulong address, ulong size, Func<string> writer)
+        {
+            if (_nx2SemaphoreWatch != 0 && _nx2SemaphoreWatch + 16 > address && _nx2SemaphoreWatch < address + size)
+            {
+                Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Semaphore watch 0x{_nx2SemaphoreWatch:X}: written by {writer()} [0x{address:X}, +0x{size:x}]");
+            }
+        }
+
+        /// <summary>
+        /// What the GPU thread is doing on a Switch 2 channel, for diagnostics of stalls.
+        /// </summary>
+        public static volatile string Nx2Phase = "idle";
+
+        /// <summary>
+        /// The last Switch 2 graphics program bound, for draw traces.
+        /// </summary>
+        internal static string Nx2LastProgram;
+
+        /// <summary>
+        /// The program of the last draw (Nx2PassDumper names render targets after it).
+        /// </summary>
+        internal static string Nx2LastDrawProgram;
+
+        /// <summary>
+        /// RYUJINX_PRESENT_TRACE=1: logs Switch 2 render targets, draws into presented images and the
+        /// content of presented images (sampled), to find out why a frame shows nothing.
+        /// </summary>
+        internal static ulong Nx2PresentedAddress;
+
+        /// <summary>
+        /// Render targets drawn since the last content report (RYUJINX_PRESENT_TRACE).
+        /// </summary>
+        internal static readonly System.Collections.Generic.Dictionary<ulong, (WeakReference<Image.Texture> Texture, int Draws)> Nx2RecentTargets = [];
+
+        private static readonly bool _nx2StorageTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_SB_TRACE") == "1";
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<(int, int, int, ulong), byte> _nx2StorageTraced = new();
+
+        /// <summary>
+        /// RYUJINX_NX2_SB_TRACE=1: logs each distinct storage buffer binding (stage, descriptor location,
+        /// address and size as read, mapped size), to check what Switch 2 constant buffers hold there.
+        /// </summary>
+        internal static void Nx2TraceStorageBuffer(string stage, int cbSlot, int cbOffset, Memory.MemoryManager memoryManager, ulong descriptorAddress, ulong address, int size, uint boundSize)
+        {
+            if (!_nx2StorageTrace || _nx2StorageTraced.Count > 400 || !_nx2StorageTraced.TryAdd((stage.GetHashCode(), cbSlot, cbOffset, address), 0))
+            {
+                return;
+            }
+
+            Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu,
+                $"Switch 2 storage buffer {stage} c[{cbSlot}][0x{cbOffset * 4:x}] (descriptor at 0x{descriptorAddress:X}): address 0x{address:X} size field 0x{size:x}, bound 0x{boundSize:x}, mapped {(address != 0 && memoryManager.IsMapped(address) ? $"0x{memoryManager.GetMappedSize(address, 0x10000000):x}" : "no")}");
+        }
+
+        /// <summary>
+        /// True when Switch 2 3D methods run on the Maxwell 3D engine (RYUJINX_NX2_MAXWELL=1), so presented
+        /// images hold what was drawn.
+        /// </summary>
+        public static bool Nx2RendersNative => Engine.GPFifo.GPFifoProcessor.Nx2Maxwell;
+
+        public static readonly bool Nx2PresentTrace = Environment.GetEnvironmentVariable("RYUJINX_PRESENT_TRACE") == "1";
+
+        /// <summary>
+        /// Hash of the Switch 2 channel whose commands the GPU thread runs, for diagnostics.
+        /// </summary>
+        internal static int Nx2CurrentChannel;
+
+        /// <summary>
+        /// Writes a release's mirror into the first page of its semaphore region, or into the mirror
+        /// table when the word there also gets direct releases (<see cref="Engine.Nx2.Nx2MirrorShadow"/>).
+        /// </summary>
+        internal void Nx2WriteMirror(MemoryManager memoryManager, ulong address, uint value)
+        {
+            if (!Nx2TryGetSemaphoreMirror(address, out ulong mirror))
+            {
+                return;
+            }
+
+            if (Engine.Nx2.Nx2MirrorShadow.Diverts(mirror))
+            {
+                Engine.Nx2.Nx2MirrorShadow.Set(mirror, value, memoryManager.Read<uint>(mirror, tracked: true));
+            }
+            else
+            {
+                memoryManager.Write(mirror, value);
+            }
+        }
+
+        private bool Nx2InSemaphoreFirstPage(ulong address)
+        {
+            lock (_nx2SemaphoreRegions)
+            {
+                return _nx2SemaphoreRegions.Count != 0 && _nx2SemaphoreRegions.Contains(address & ~0xfffUL);
+            }
+        }
+
+        /// <summary>
+        /// A plain (not mirrored) release landed at <paramref name="address"/>.
+        /// </summary>
+        internal void Nx2NoteDirectRelease(ulong address)
+        {
+            if (Nx2InSemaphoreFirstPage(address))
+            {
+                Engine.Nx2.Nx2MirrorShadow.NoteDirectRelease(address);
+            }
+        }
+
+        /// <summary>
+        /// A release combining with the word it lands on (max or reduction) took it from
+        /// <paramref name="before"/> to <paramref name="after"/>.
+        /// </summary>
+        internal void Nx2NoteCombinedRelease(ulong address, uint before, uint after, Func<uint, uint> combine)
+        {
+            if (Nx2InSemaphoreFirstPage(address))
+            {
+                Engine.Nx2.Nx2MirrorShadow.NoteCombinedRelease(address, before, after, combine);
+            }
+        }
+
+        /// <summary>
+        /// The value of a semaphore word as GPU acquires see it (mirrored releases included).
+        /// </summary>
+        internal static uint Nx2ReadSemaphore(MemoryManager memoryManager, ulong address)
+        {
+            uint guest = memoryManager.Read<uint>(address, tracked: true);
+
+            return Engine.Nx2.Nx2MirrorShadow.Read(address, guest) ?? guest;
+        }
+
+        /// <summary>
+        /// Size of a Switch 2 storage buffer binding. A native pointer is bare: bound up to 8 MiB of its
+        /// mapping. A read-only compute binding grows to a plausible size word after the pointer: Mario Kart
+        /// World's lighting passes read past 8 MiB (capped, those reads came back empty and lit surfaces
+        /// stayed dark). Port of Lichii's StorageBufferBinding (#1231, #1333).
+        /// </summary>
+        internal static uint Nx2StorageBufferSize(Memory.MemoryManager memoryManager, in Engine.Types.SbDescriptor descriptor, bool compute, bool written)
+        {
+            const ulong BareLimit = 8UL << 20;
+            const ulong SizeWordLimit = (1UL << 30) - (64UL << 10);
+
+            ulong address = descriptor.PackAddress();
+            ulong mapped = memoryManager.GetMappedSize(address, SizeWordLimit);
+            ulong bare = Math.Min(mapped, BareLimit);
+
+            uint sizeWord = (uint)descriptor.Size;
+            bool isSizeWord = descriptor.Padding == 0 && sizeWord != 0 && sizeWord <= mapped;
+
+            if (compute && !written && isSizeWord && sizeWord > bare)
+            {
+                return (uint)Math.Min(sizeWord, SizeWordLimit);
+            }
+
+            return (uint)bare;
+        }
+
+        internal bool Nx2TryGetSemaphoreMirror(ulong address, out ulong mirror)
+        {
+            mirror = address - 0x1000;
+
+            lock (_nx2SemaphoreRegions)
+            {
+                return _nx2SemaphoreRegions.Count != 0 && _nx2SemaphoreRegions.Contains(mirror & ~0xfffUL);
+            }
+        }
 
         /// <summary>
         /// Presentation window.

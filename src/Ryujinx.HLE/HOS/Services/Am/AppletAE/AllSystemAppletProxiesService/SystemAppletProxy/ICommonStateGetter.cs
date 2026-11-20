@@ -281,12 +281,24 @@ namespace Ryujinx.HLE.HOS.Services.Am.AppletAE.AllSystemAppletProxiesService.Sys
 
             if (cpuBoostMode > 1)
             {
-                return ResultCode.InvalidParameters;
+                // Switch 2 titles ask for boost modes Switch 1 never had; nothing depends on the mode.
+                Logger.Stub?.PrintStub(LogClass.ServiceAm, new { cpuBoostMode });
+
+                return ResultCode.Success;
             }
 
             _apmSystemManagerServer.SetCpuBoostMode((Apm.CpuBoostMode)cpuBoostMode);
 
             // TODO: It signals an internal event of ICommonStateGetter. We have to determine where this event is used.
+
+            return ResultCode.Success;
+        }
+
+        [CommandCmif(67)] // 10.0.0+
+        // CancelCpuBoostMode()
+        public ResultCode CancelCpuBoostMode(ServiceCtx context)
+        {
+            _apmSystemManagerServer.SetCpuBoostMode(Apm.CpuBoostMode.Disabled);
 
             return ResultCode.Success;
         }

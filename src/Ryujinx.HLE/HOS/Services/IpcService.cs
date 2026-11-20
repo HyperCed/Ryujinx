@@ -220,7 +220,15 @@ namespace Ryujinx.HLE.HOS.Services
                 {
                     if (this is INx2StubService nx2Stub)
                     {
-                        Logger.Stub?.PrintStub(LogClass.ServiceAm, $"{nx2Stub.InterfaceName}: {commandId}");
+                        if (nx2Stub.IsZeroedCommand(commandId))
+                        {
+                            // Firmware commands without a known meaning: zeroed replies.
+                            context.ResponseData.Write(new byte[Nx2.Nx2Tipc.ZeroedWords * sizeof(uint)]);
+                        }
+                        else
+                        {
+                            Logger.Stub?.PrintStub(LogClass.ServiceAm, $"{nx2Stub.InterfaceName}: {commandId}");
+                        }
                     }
                     else
                     {

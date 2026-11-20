@@ -1,7 +1,9 @@
+using Ryujinx.Common.Logging;
 using Ryujinx.Graphics.GAL;
 using Ryujinx.Memory.Range;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 
 namespace Ryujinx.Graphics.Gpu.Memory
@@ -623,6 +625,11 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="overlaps">Buffers overlapping the range</param>
         private Buffer CreateBufferAligned(ulong address, ulong size, BufferStage stage, bool sparseCompatible, Buffer[] overlaps)
         {
+            if (GpuContext.Nx2AllocationTrace && size >= 32UL << 20)
+            {
+                Logger.Info?.Print(LogClass.Gpu, $"Switch 2 large buffer 0x{address:X} +{size >> 20} MiB (stage {stage}, {overlaps.Length} overlaps)\n{Environment.StackTrace.Split('\n').Skip(2).Take(8).Aggregate((a, b) => a + "\n" + b)}");
+            }
+
             Buffer newBuffer = new(_context, _physicalMemory, address, size, stage, sparseCompatible, overlaps);
 
             for (int index = 0; index < overlaps.Length; index++)

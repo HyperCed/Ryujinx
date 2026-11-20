@@ -17,7 +17,8 @@ namespace Ryujinx.Cpu.AppleHv
         // VCPUs for threads that are not running frequently "ephemeral", but this is
         // complicated because VCPUs can only be destroyed by the same thread that created them.
 
-        private const int MaxActiveVcpus = 4;
+        // Switch 2 titles run on six cores, so up to six guest threads are active at once.
+        private const int MaxActiveVcpus = 6;
 
         public static readonly HvVcpuPool Instance = new();
 

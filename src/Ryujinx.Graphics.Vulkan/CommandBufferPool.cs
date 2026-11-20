@@ -29,6 +29,7 @@ namespace Ryujinx.Graphics.Vulkan
             public bool InUse;
             public bool InConsumption;
             public int SubmissionCount;
+            public long SubmitTimestamp;
             public CommandBuffer CommandBuffer;
             public FenceHolder Fence;
 
@@ -53,6 +54,71 @@ namespace Ryujinx.Graphics.Vulkan
         }
 
         private readonly ReservedCommandBuffer[] _commandBuffers;
+
+        // RYUJINX_GPU_WATCHDOG_MS=<ms>: stop the process when a submitted command buffer has not completed
+        // after that long. On a Mac the GPU also composites the screen: a hung or overloaded GPU stalls
+        // WindowServer, which macOS kills after a while, ending the session. Exiting frees the GPU.
+        private static readonly int _watchdogMilliseconds = int.TryParse(Environment.GetEnvironmentVariable("RYUJINX_GPU_WATCHDOG_MS"), out int watchdog) ? watchdog : 0;
+        private Thread _watchdog;
+        private volatile bool _disposed;
+
+        private void StartWatchdog()
+        {
+            if (_watchdogMilliseconds <= 0)
+            {
+                return;
+            }
+
+            _watchdog = new Thread(() =>
+            {
+                long limit = Stopwatch.Frequency * _watchdogMilliseconds / 1000;
+
+                while (!_disposed)
+                {
+                    Thread.Sleep(50);
+
+                    long now = Stopwatch.GetTimestamp();
+
+                    lock (_commandBuffers)
+                    {
+                        for (int i = 0; i < _totalCommandBuffers; i++)
+                        {
+                            ref ReservedCommandBuffer entry = ref _commandBuffers[i];
+
+                            if (!entry.InConsumption || entry.SubmitTimestamp == 0 || now - entry.SubmitTimestamp < limit)
+                            {
+                                continue;
+                            }
+
+                            bool signaled;
+
+                            try
+                            {
+                                signaled = entry.Fence.IsSignaled();
+                            }
+                            catch (Exception)
+                            {
+                                continue;
+                            }
+
+                            if (!signaled)
+                            {
+                                Ryujinx.Common.Logging.Logger.Error?.PrintMsg(Ryujinx.Common.Logging.LogClass.Gpu, $"GPU watchdog: command buffer {i} not done {(now - entry.SubmitTimestamp) * 1000 / Stopwatch.Frequency} ms after submission, exiting (RYUJINX_GPU_WATCHDOG_MS)");
+                                Ryujinx.Common.Logging.Logger.Flush();
+                                Environment.FailFast("GPU watchdog: a command buffer did not complete in time (RYUJINX_GPU_WATCHDOG_MS)");
+                            }
+                        }
+                    }
+                }
+            })
+            {
+                Name = "GPU.Watchdog",
+                IsBackground = true,
+                Priority = ThreadPriority.Highest,
+            };
+
+            _watchdog.Start();
+        }
 
         private readonly int[] _queuedIndexes;
         private int _queuedIndexesPtr;
@@ -99,7 +165,9 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 _commandBuffers[i].Initialize(api, device, _pool);
                 WaitAndDecrementRef(i);
-            }
+    
+            StartWatchdog();
+        }
         }
 
         public void AddDependant(int cbIndex, IAuto dependant)
@@ -313,6 +381,8 @@ namespace Ryujinx.Graphics.Vulkan
                         {
                             _api.QueueSubmit(_queue, 1, in sInfo, entry.Fence.GetUnsafe()).ThrowOnError();
                         }
+
+                        entry.SubmitTimestamp = Stopwatch.GetTimestamp();
                     }
                 }
 
@@ -359,6 +429,8 @@ namespace Ryujinx.Graphics.Vulkan
 
         public unsafe void Dispose()
         {
+            _disposed = true;
+
             for (int i = 0; i < _totalCommandBuffers; i++)
             {
                 WaitAndDecrementRef(i, refreshFence: false);

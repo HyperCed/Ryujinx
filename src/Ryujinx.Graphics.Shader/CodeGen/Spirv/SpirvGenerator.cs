@@ -120,7 +120,24 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 info.IoDefinitions.Add(new IoDefinition(StorageKind.Input, IoVariable.SubgroupLaneId));
             }
 
+            bool isTaskOrMesh = parameters.Definitions.Nx2Mesh != null;
+
+            // Known before the declarations: SPIR-V 1.4 declares storage buffers differently.
+            context.Nx2UsesMeshShader = isTaskOrMesh ||
+                (parameters.Definitions.Stage == ShaderStage.Fragment && parameters.Definitions.Nx2PerPrimitiveInputs != 0);
+
+            if (isTaskOrMesh)
+            {
+                Nx2MeshCodeGen.AddIoDefinitions(info);
+            }
+
             Declarations.DeclareAll(context, info);
+
+            if (isTaskOrMesh)
+            {
+                context.Nx2Mesh = Nx2MeshCodeGen.Declare(context);
+                context.Nx2UsesMeshShader = true;
+            }
 
             for (int funcIndex = 0; funcIndex < info.Functions.Count; funcIndex++)
             {
@@ -147,6 +164,19 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 Generate(context, info, funcIndex);
             }
 
+            if (context.Nx2UsesMeshShader)
+            {
+                if (context.Definitions.Stage != ShaderStage.Compute ||
+                    context.Definitions.Nx2Mesh?.ComputeFallback != true)
+                {
+                    // SPV_EXT_mesh_shader needs SPIR-V 1.4 (entry points then list every global, see Generate).
+                    context.AddCapability(Capability.MeshShadingEXT);
+                    context.AddExtension("SPV_EXT_mesh_shader");
+                }
+
+                context.Version = (1u << 16) | (4u << 8);
+            }
+
             byte[] result = context.Generate();
 
             lock (_poolLock)
@@ -160,9 +190,14 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
         private static void Generate(CodeGenContext context, StructuredProgramInfo info, int funcIndex)
         {
+            bool nx2MeshAsCompute =
+                context.Definitions.Stage == ShaderStage.Compute &&
+                context.Definitions.Nx2Mesh?.ComputeFallback == true;
+
             (StructuredFunction function, SpvInstruction spvFunc) = context.GetFunction(funcIndex);
 
             context.CurrentFunction = function;
+            context.Nx2BlockTerminated = false;
             context.AddFunction(spvFunc);
             context.StartFunction(isMainFunction: funcIndex == 0);
 
@@ -171,6 +206,18 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             context.EnterBlock(function.MainBlock);
 
             Declarations.DeclareLocals(context, function);
+
+            context.LoopCounter = null;
+
+            if (context.Definitions.BoundLoops)
+            {
+                SpvInstruction counterPointerType = context.TypePointer(StorageClass.Function, context.TypeU32());
+                SpvInstruction counter = context.Variable(counterPointerType, StorageClass.Function);
+
+                context.AddLocalVariable(counter);
+                context.Store(counter, context.Constant(context.TypeU32(), 0));
+                context.LoopCounter = counter;
+            }
 
             Generate(context, function.MainBlock);
 
@@ -185,7 +232,26 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
             if (funcIndex == 0)
             {
-                context.AddEntryPoint(context.Definitions.Stage.Convert(), spvFunc, "main", context.GetMainInterface());
+                // From SPIR-V 1.4 on, the interface lists every global variable the entry point uses.
+                SpvInstruction[] mainInterface = context.Nx2UsesMeshShader ? [.. context.GlobalVariables] : context.GetMainInterface();
+
+                context.AddEntryPoint(
+                    nx2MeshAsCompute ? ExecutionModel.GLCompute : context.Definitions.Stage.Convert(),
+                    spvFunc,
+                    "main",
+                    mainInterface);
+
+                if (context.Definitions.Nx2Mesh is Nx2MeshInfo mesh)
+                {
+                    context.AddExecutionMode(spvFunc, ExecutionMode.LocalSize, (SpvLiteralInteger)mesh.Threads, (SpvLiteralInteger)1, (SpvLiteralInteger)1);
+
+                    if (!nx2MeshAsCompute && mesh.Stage == ShaderStage.Mesh)
+                    {
+                        context.AddExecutionMode(spvFunc, ExecutionMode.OutputVertices, (SpvLiteralInteger)Math.Max(mesh.MaxVertices, 1));
+                        context.AddExecutionMode(spvFunc, ExecutionMode.OutputPrimitivesEXT, (SpvLiteralInteger)Math.Max(mesh.MaxPrimitives, 1));
+                        context.AddExecutionMode(spvFunc, ExecutionMode.OutputTrianglesEXT);
+                    }
+                }
 
                 if (context.Definitions.Stage == ShaderStage.TessellationControl)
                 {
@@ -303,6 +369,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             }
         }
 
+        /// <summary>
+        /// Loop iterations a function with bounded loops may run (see ShaderDefinitions.BoundLoops).
+        /// </summary>
+        private const int MaxLoopIterations = 256;
+
         private static void Generate(CodeGenContext context, AstBlock block)
         {
             AstBlockVisitor visitor = new(block);
@@ -363,6 +434,19 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                         context.AddLabel(continueTarget);
 
                         SpvInstruction condition = context.Get(AggregateType.Bool, e.Block.Condition);
+
+                        if (context.LoopCounter != null)
+                        {
+                            // Leave the loop once the function has looped MaxLoopIterations times in all.
+                            SpvInstruction count = context.Load(context.TypeU32(), context.LoopCounter);
+                            SpvInstruction next = context.IAdd(context.TypeU32(), count, context.Constant(context.TypeU32(), 1));
+
+                            context.Store(context.LoopCounter, next);
+
+                            SpvInstruction withinBound = context.ULessThan(context.TypeBool(), next, context.Constant(context.TypeU32(), MaxLoopIterations));
+
+                            condition = context.LogicalAnd(context.TypeBool(), condition, withinBound);
+                        }
 
                         context.BranchConditional(condition, loopTarget, context.GetNextLabel(mergeBlock));
                     }

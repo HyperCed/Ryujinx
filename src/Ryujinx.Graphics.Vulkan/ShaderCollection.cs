@@ -21,6 +21,11 @@ namespace Ryujinx.Graphics.Vulkan
         public bool HasMinimalLayout { get; }
         public bool UsePushDescriptors { get; }
         public bool IsCompute { get; }
+
+        /// <summary>
+        /// Switch 2 task/mesh program: its pipelines have no vertex input, input assembly or tessellation state.
+        /// </summary>
+        public bool IsMesh { get; }
         public bool HasTessellationControlShader => (Stages & (1u << 3)) != 0;
 
         public bool UpdateTexturesWithoutTemplate { get; }
@@ -109,10 +114,20 @@ namespace Ryujinx.Graphics.Vulkan
                     IsCompute = true;
                 }
 
+                if (shader.StageFlags is ShaderStageFlags.TaskBitExt or ShaderStageFlags.MeshBitExt)
+                {
+                    IsMesh = true;
+                }
+
                 internalShaders[i] = shader;
             }
 
             _shaders = internalShaders;
+
+            if (IsMesh && gd.MeshShaderApi == null)
+            {
+                throw new NotSupportedException("Task/mesh program without VK_EXT_mesh_shader");
+            }
 
             bool usePushDescriptors = !isMinimal &&
                 VulkanConfiguration.UsePushDescriptors &&
@@ -424,6 +439,16 @@ namespace Ryujinx.Graphics.Vulkan
             if ((stages & ResourceStages.TessellationEvaluation) != 0)
             {
                 result |= PipelineStageFlags.TessellationEvaluationShaderBit;
+            }
+
+            if ((stages & ResourceStages.Task) != 0)
+            {
+                result |= PipelineStageFlags.TaskShaderBitExt;
+            }
+
+            if ((stages & ResourceStages.Mesh) != 0)
+            {
+                result |= PipelineStageFlags.MeshShaderBitExt;
             }
 
             return result;

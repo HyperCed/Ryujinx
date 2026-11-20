@@ -9,7 +9,22 @@ namespace Ryujinx.Graphics.Shader.Translation
     {
         private readonly GpuGraphicsState _graphicsState;
 
-        public ShaderStage Stage { get; }
+        public ShaderStage Stage { get; internal set; }
+
+        /// <summary>
+        /// Stage buffer layout of a Switch 2 task or mesh program (null for other programs).
+        /// </summary>
+        internal Nx2MeshInfo Nx2Mesh { get; set; }
+
+        /// <summary>
+        /// Fragment programs after a Switch 2 mesh program: generic inputs it writes per primitive.
+        /// </summary>
+        public int Nx2PerPrimitiveInputs { get; set; }
+
+        /// <summary>
+        /// The program is a lowered Switch 2 program (surface accesses out of bounds are ignored there).
+        /// </summary>
+        public bool Nx2NativeProgram { get; set; }
 
         public int ComputeLocalSizeX { get; }
         public int ComputeLocalSizeY { get; }
@@ -30,6 +45,12 @@ namespace Ryujinx.Graphics.Shader.Translation
         public float AlphaTestReference => _graphicsState.AlphaTestReference;
 
         public bool GpPassthrough { get; }
+
+        /// <summary>
+        /// Bounds the iterations of every loop (lowered Switch 2 programs): a program running on wrong
+        /// data must not hang the host GPU.
+        /// </summary>
+        public bool BoundLoops { get; set; }
         public bool LastInVertexPipeline { get; set; }
 
         public int ThreadsPerInputPrimitive { get; private set; }

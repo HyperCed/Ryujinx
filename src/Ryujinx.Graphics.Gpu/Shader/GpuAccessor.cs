@@ -18,6 +18,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         private readonly int _stageIndex;
         private readonly bool _compute;
         private readonly bool _isVulkan;
+        private readonly bool _supportsMeshShaders;
         private readonly bool _hasGeometryShader;
         private readonly bool _supportsQuads;
 
@@ -40,6 +41,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
             _state = state;
             _stageIndex = stageIndex;
             _isVulkan = context.Capabilities.Api == TargetApi.Vulkan;
+            _supportsMeshShaders = context.Capabilities.SupportsMeshShaders;
             _hasGeometryShader = hasGeometryShader;
             _supportsQuads = context.Capabilities.SupportsQuads;
 
@@ -63,6 +65,42 @@ namespace Ryujinx.Graphics.Gpu.Shader
             _compute = true;
         }
 
+        private ulong _nx2CodeAddress;
+        private byte[] _nx2Code;
+
+        /// <summary>
+        /// Makes the translator read <paramref name="code"/> (a lowered Switch 2 program) at
+        /// <paramref name="address"/> instead of guest memory.
+        /// </summary>
+        public void Nx2SetCode(ulong address, byte[] code)
+        {
+            _nx2CodeAddress = address;
+            _nx2Code = code;
+        }
+
+        /// <inheritdoc/>
+        public bool QueryNx2NativeProgram() => _nx2Code != null;
+
+        private Ryujinx.Graphics.Shader.Translation.Nx2MeshState _nx2Mesh;
+        private int _nx2PerPrimitiveInputs;
+
+        /// <summary>
+        /// Makes the program translate as a Switch 2 task or mesh program.
+        /// </summary>
+        public void Nx2SetMesh(Ryujinx.Graphics.Shader.Translation.Nx2MeshState state) =>
+            _nx2Mesh = state.WithComputeFallback(_isVulkan && !_supportsMeshShaders);
+
+        /// <summary>
+        /// Sets the generic inputs of a fragment program that the mesh program before it writes per primitive.
+        /// </summary>
+        public void Nx2SetPerPrimitiveInputs(int mask) => _nx2PerPrimitiveInputs = mask;
+
+        /// <inheritdoc/>
+        public Ryujinx.Graphics.Shader.Translation.Nx2MeshState QueryNx2MeshState() => _nx2Mesh;
+
+        /// <inheritdoc/>
+        public int QueryNx2PerPrimitiveInputs() => _nx2PerPrimitiveInputs;
+
         /// <inheritdoc/>
         public uint ConstantBuffer1Read(int offset)
         {
@@ -76,12 +114,22 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <inheritdoc/>
         public void Log(string message)
         {
-            Logger.Warning?.Print(LogClass.Gpu, $"Shader translator: {message}");
+            string shaderContext = _nx2Code == null
+                ? string.Empty
+                : $"Switch 2 {(_compute ? "compute" : $"graphics stage {_stageIndex}")} shader 0x{_nx2CodeAddress:X}: ";
+
+            Logger.Warning?.Print(LogClass.Gpu, $"Shader translator: {shaderContext}{message}");
         }
 
         /// <inheritdoc/>
         public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize)
         {
+            if (_nx2Code != null && address >= _nx2CodeAddress && address - _nx2CodeAddress < (ulong)_nx2Code.Length)
+            {
+                // Switch 2: the lowered program stands in for the native one at its address.
+                return MemoryMarshal.Cast<byte, ulong>(_nx2Code.AsSpan((int)(address - _nx2CodeAddress) & ~7));
+            }
+
             int size = Math.Max(minimumSize, 0x1000 - (int)(address & 0xfff));
 
             return MemoryMarshal.Cast<byte, ulong>(_channel.MemoryManager.GetSpan(address, size));

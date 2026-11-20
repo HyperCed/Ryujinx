@@ -11,7 +11,21 @@ namespace Spv.Generator
         // TODO: Register on SPIR-V registry.
         private const int GeneratorId = 0;
 
-        private readonly uint _version;
+        private uint _version;
+
+        /// <summary>
+        /// SPIR-V version of the module (packed major.minor.revision).
+        /// </summary>
+        public uint Version
+        {
+            get => _version;
+            set => _version = value;
+        }
+
+        /// <summary>
+        /// Module-scope variables declared so far (from SPIR-V 1.4 on, an entry point lists all those it uses).
+        /// </summary>
+        public IReadOnlyList<Instruction> GlobalVariables => _globals;
 
         private uint _bound;
 

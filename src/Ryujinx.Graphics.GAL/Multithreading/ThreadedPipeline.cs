@@ -69,9 +69,21 @@ namespace Ryujinx.Graphics.GAL.Multithreading
             _renderer.QueueCommand();
         }
 
+        public unsafe void DispatchComputeIndirect(BufferRange indirectBuffer)
+        {
+            _renderer.New<DispatchComputeIndirectCommand>()->Set(indirectBuffer);
+            _renderer.QueueCommand();
+        }
+
         public unsafe void Draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance)
         {
             _renderer.New<DrawCommand>()->Set(vertexCount, instanceCount, firstVertex, firstInstance);
+            _renderer.QueueCommand();
+        }
+
+        public unsafe void DrawMeshTasks(int groupCountX, int groupCountY, int groupCountZ)
+        {
+            _renderer.New<DrawMeshTasksCommand>()->Set(groupCountX, groupCountY, groupCountZ);
             _renderer.QueueCommand();
         }
 

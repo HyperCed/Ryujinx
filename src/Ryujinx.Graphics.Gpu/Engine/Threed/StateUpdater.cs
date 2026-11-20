@@ -1,4 +1,5 @@
 using Ryujinx.Common.Logging;
+using Ryujinx.Common.Memory;
 using Ryujinx.Graphics.GAL;
 using Ryujinx.Graphics.Gpu.Engine.Threed.Blender;
 using Ryujinx.Graphics.Gpu.Engine.Types;
@@ -8,6 +9,7 @@ using Ryujinx.Graphics.Gpu.Shader;
 using Ryujinx.Graphics.Shader;
 using Ryujinx.Graphics.Texture;
 using System;
+using System.Linq;
 using System.Runtime.CompilerServices;
 
 namespace Ryujinx.Graphics.Gpu.Engine.Threed
@@ -96,7 +98,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     nameof(ThreedClassState.VertexBufferDrawState),
                     nameof(ThreedClassState.VertexBufferInstanced),
                     nameof(ThreedClassState.VertexBufferState),
-                    nameof(ThreedClassState.VertexBufferEndAddress)),
+                    nameof(ThreedClassState.VertexBufferEndAddress),
+                    nameof(ThreedClassState.Nx2VertexStreamSize)),
 
                 // Must be done after vertex buffer updates.
                 new StateUpdateCallbackEntry(UpdateVertexAttribState, nameof(ThreedClassState.VertexAttribState)),
@@ -199,7 +202,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
                 new StateUpdateCallbackEntry(UpdateShaderState,
                     nameof(ThreedClassState.ShaderBaseAddress),
-                    nameof(ThreedClassState.ShaderState)),
+                    nameof(ThreedClassState.ShaderState),
+                    nameof(ThreedClassState.Nx2MeshState)),
 
                 new StateUpdateCallbackEntry(UpdateRenderTargetState,
                     nameof(ThreedClassState.RtColorState),
@@ -387,7 +391,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     SbDescriptor sbDescriptor = _channel.MemoryManager.Physical.Read<SbDescriptor>(sbDescAddress);
 
                     uint size;
-                    if (sb.SbCbSlot == Constants.DriverReservedUniformBuffer)
+                    if (_context.Nx2Ampere)
+                    {
+                        size = GpuContext.Nx2StorageBufferSize(_channel.MemoryManager, sbDescriptor, compute: false, written: sb.Flags.HasFlag(BufferUsageFlags.Write));
+                    }
+                    else if (sb.SbCbSlot == Constants.DriverReservedUniformBuffer)
                     {
                         // Only trust the SbDescriptor size if it comes from slot 0.
                         size = (uint)sbDescriptor.Size;
@@ -396,6 +404,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     {
                         // TODO: Use full mapped size and somehow speed up buffer sync.
                         size = (uint)_channel.MemoryManager.GetMappedSize(sbDescriptor.PackAddress(), Constants.MaxUnknownStorageSize);
+                    }
+
+                    if (_context.Nx2Ampere)
+                    {
+                        GpuContext.Nx2TraceStorageBuffer($"stage {stage}", sb.SbCbSlot, sb.SbCbOffset, _channel.MemoryManager, sbDescAddress, sbDescriptor.PackAddress(), sbDescriptor.Size, size);
                     }
 
                     _channel.BufferManager.SetGraphicsStorageBuffer(stage, sb.Slot, sbDescriptor.PackAddress(), size, sb.Flags);
@@ -519,6 +532,21 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     sizeHint);
 
                 changedScale |= _channel.TextureManager.SetRenderTargetColor(index, color);
+
+                if (GpuContext.Nx2PresentTrace && color != null && _context.Nx2Ampere)
+                {
+                    lock (GpuContext.Nx2RecentTargets)
+                    {
+                        ulong key = colorState.Address.Pack();
+                        GpuContext.Nx2RecentTargets[key] = (new WeakReference<Image.Texture>(color), GpuContext.Nx2RecentTargets.TryGetValue(key, out var entry) ? entry.Draws + 1 : 1);
+                    }
+                }
+
+                if (GpuContext.Nx2PresentTrace && color != null && _context.Nx2Ampere &&
+                    _nx2TracedTargets.Add((colorState.Address.Pack(), colorState.WidthOrStride, colorState.Height, (uint)colorState.Format)))
+                {
+                    Logger.Info?.Print(LogClass.Gpu, $"Switch 2 render target {index}: 0x{colorState.Address.Pack():X} {colorState.WidthOrStride}x{colorState.Height} format 0x{(uint)colorState.Format:x} memory layout 0x{colorState.MemoryLayout.Packed:x} -> {color.Info.Width}x{color.Info.Height} {color.Info.FormatInfo.Format} gobs {color.Info.GobBlocksInY} linear {color.Info.IsLinear} texture #{color.GetHashCode():x}");
+                }
 
                 if (color != null)
                 {
@@ -813,7 +841,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             // Viewport size is only used on the shader when YNegate is enabled,
             // and if the fragment shader accesses gl_FragCoord,
             // so there's no need to update it in other cases.
-            if (yNegate && _fsReadsFragCoord)
+            // Switch 2 blit shaders read the render area from it (Nx2BlitConstants).
+            if ((yNegate && _fsReadsFragCoord) || _context.Nx2Ampere)
             {
                 UpdateSupportBufferViewportSize();
             }
@@ -961,7 +990,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             PoolState texturePool = _state.State.TexturePoolState;
 
             _channel.TextureManager.SetGraphicsTexturePool(texturePool.Address.Pack(), texturePool.MaximumId);
-            _channel.TextureManager.SetGraphicsTextureBufferIndex((int)_state.State.TextureBufferIndex);
+            _channel.TextureManager.SetGraphicsTextureBufferIndex(TextureBufferIndex);
 
             _currentSpecState.SetPoolState(GetPoolState());
         }
@@ -1156,7 +1185,16 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
                 _drawState.IsAnyVbInstanced |= divisor != 0;
 
-                ulong vbSize = endAddress.Pack() - address + 1;
+                // Switch 2 sets a byte size (SET_VERTEX_STREAM_SIZE) instead of the end address.
+                ulong vbSize = _context.Nx2Ampere
+                    ? (((ulong)(_state.State.Nx2VertexStreamSize[index * 2] & 0xff) << 32) | _state.State.Nx2VertexStreamSize[index * 2 + 1]) + _nx2VertexBufferMargin
+                    : endAddress.Pack() - address + 1;
+
+                if (_nx2VertexBufferTrace && _nx2VertexBufferTraces < 400)
+                {
+                    _nx2VertexBufferTraces++;
+                    Logger.Info?.Print(LogClass.Gpu, $"Switch 2 vertex buffer {index}: address 0x{address:X} stride {stride} size A 0x{_state.State.Nx2VertexStreamSize[index * 2]:x} B 0x{_state.State.Nx2VertexStreamSize[index * 2 + 1]:x} end 0x{endAddress.Pack():X} indexed {drawIndexed} instanced {instanced}");
+                }
                 ulong size;
 
                 if (_drawState.IbStreamer.HasInlineIndexData || drawIndexed || stride == 0 || instanced)
@@ -1432,6 +1470,144 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             _currentSpecState.SetEarlyZForce(_state.State.EarlyZForce);
         }
 
+        // Switch 2 programs whose translation failed, by their stage addresses: each is rejected once,
+        // and every later draw with them is skipped without decoding them again.
+        private static readonly System.Collections.Generic.HashSet<ShaderAddresses> _nx2RejectedPrograms = [];
+
+        private void Nx2DumpPrograms(ShaderAddresses addresses)
+        {
+            if (Environment.GetEnvironmentVariable("RYUJINX_NX2_SHADER_DUMP") == null)
+            {
+                return;
+            }
+
+            ReadOnlySpan<ulong> stageAddresses = [addresses.VertexA, addresses.VertexB, addresses.TessControl, addresses.TessEvaluation, addresses.Geometry, addresses.Fragment];
+            ReadOnlySpan<string> stageNames = ["vsa", "vs", "tcs", "tes", "gs", "fs"];
+
+            for (int index = 0; index < stageAddresses.Length; index++)
+            {
+                ulong address = stageAddresses[index];
+
+                if (address == 0)
+                {
+                    continue;
+                }
+
+                Shader.Nx2.Nx2Instruction[] code = Shader.Nx2.Nx2NativeProgram.Capture(_channel.MemoryManager, address, Shader.Nx2.Nx2NativeProgram.GraphicsHeaderSize, out _);
+
+                if (code != null)
+                {
+                    Shader.Nx2.Nx2NativeProgram.Dump(_channel.MemoryManager, address, Shader.Nx2.Nx2NativeProgram.GraphicsHeaderSize, stageNames[index], code);
+                }
+            }
+        }
+
+        private readonly System.Collections.Generic.HashSet<(ulong, int, int, uint)> _nx2TracedTargets = [];
+
+        /// <summary>
+        /// The constant buffer holding texture handles. Switch 2 programs lowered to Maxwell code read
+        /// them from NVN's texture bank 2 (the lowering's required texture buffer) while the register is 0.
+        /// </summary>
+        private int TextureBufferIndex => _context.Nx2Ampere && _state.State.TextureBufferIndex == 0
+            ? Nx2TextureBufferIndex
+            : (int)_state.State.TextureBufferIndex;
+
+        /// <summary>
+        /// NVN's constant buffer for texture handles.
+        /// </summary>
+        internal const int Nx2TextureBufferIndex = 2;
+
+        private static readonly bool _nx2VertexBufferTrace = Environment.GetEnvironmentVariable("RYUJINX_NX2_VB_TRACE") == "1";
+        private static int _nx2VertexBufferTraces;
+
+        // Added to Switch 2 vertex buffer sizes: the console fetches 0 past the end of a vertex stream, Metal has
+        // no robust vertex fetch and faults when a draw reads past a small buffer (the title's draws do).
+        // RYUJINX_NX2_VB_MARGIN=<hex bytes> changes it.
+        private static readonly ulong _nx2VertexBufferMargin = Convert.ToUInt64(Environment.GetEnvironmentVariable("RYUJINX_NX2_VB_MARGIN") ?? "10000", 16);
+
+        private static readonly bool _nx2NoMesh = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_MESH") == "1";
+
+        /// <summary>
+        /// While SET_MESH_CONTROL is on, a Switch 2 draw binds a task program in the vertex slot (or its mesh
+        /// program without a task), the mesh program in the tessellation evaluation slot and a header-only
+        /// pass-through geometry program naming the per-primitive outputs (read here, not translated).
+        /// </summary>
+        private Shader.Nx2.Nx2MeshDraw Nx2GetMeshDraw(Span<ulong> addressesSpan)
+        {
+            ref Array4<uint> mesh = ref _state.State.Nx2MeshState;
+
+            if ((mesh[0] & 1) == 0)
+            {
+                return null;
+            }
+
+            if (_nx2NoMesh)
+            {
+                throw new Nx2DrawSkippedException();
+            }
+
+            ulong geometry = addressesSpan[4];
+            bool hasTask = addressesSpan[3] != 0;
+            byte[] header = null;
+
+            if (geometry != 0 && _channel.MemoryManager.IsMapped(geometry))
+            {
+                header = _channel.MemoryManager.GetSpan(geometry, 0x50).ToArray();
+            }
+
+            addressesSpan[2] = 0;
+            addressesSpan[4] = 0;
+
+            return new Shader.Nx2.Nx2MeshDraw(mesh[1], mesh[2], mesh[3], header, hasTask);
+        }
+
+        private CachedShaderProgram Nx2GetGraphicsShader(ShaderCache shaderCache, int samplerPoolMaximumId, ShaderAddresses addresses, Shader.Nx2.Nx2MeshDraw nx2Mesh)
+        {
+            Nx2DumpPrograms(addresses);
+            if (GpuContext.Nx2PresentTrace || Nx2PassDumper.Active)
+            {
+                GpuContext.Nx2LastProgram = $"VS 0x{addresses.VertexB:X} TCS 0x{addresses.TessControl:X} TES 0x{addresses.TessEvaluation:X} GS 0x{addresses.Geometry:X} FS 0x{addresses.Fragment:X}";
+            }
+
+            lock (_nx2RejectedPrograms)
+            {
+                if (_nx2RejectedPrograms.Contains(addresses))
+                {
+                    throw new Nx2DrawSkippedException();
+                }
+            }
+
+            try
+            {
+                return shaderCache.GetGraphicsShader(
+                    ref _state.State,
+                    ref _pipeline,
+                    _channel,
+                    samplerPoolMaximumId,
+                    ref _currentSpecState.GetPoolState(),
+                    ref _currentSpecState.GetGraphicsState(),
+                    addresses,
+                    nx2Mesh);
+            }
+            catch (Exception exception) when (exception is not Nx2DrawSkippedException)
+            {
+                int count;
+
+                lock (_nx2RejectedPrograms)
+                {
+                    _nx2RejectedPrograms.Add(addresses);
+                    count = _nx2RejectedPrograms.Count;
+                }
+
+                if (count <= 32 || count % 100 == 0)
+                {
+                    Logger.Warning?.Print(LogClass.Gpu, $"Switch 2 graphics program rejected ({count} so far): VS 0x{addresses.VertexB:X} {(nx2Mesh != null ? $"mesh 0x{addresses.TessEvaluation:X} (A 0x{nx2Mesh.ShaderA:x} B 0x{nx2Mesh.ShaderB:x} init 0x{nx2Mesh.InitShader:x}) " : "")}FS 0x{addresses.Fragment:X}: {exception.GetType().Name}: {exception.Message}{(exception is NotSupportedException or InvalidOperationException ? "" : $" at {exception.StackTrace?.Split('\n').FirstOrDefault()?.Trim()}")}");
+                }
+
+                throw new Nx2DrawSkippedException();
+            }
+        }
+
         /// <summary>
         /// Updates host shaders based on the guest GPU state.
         /// </summary>
@@ -1455,21 +1631,36 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     continue;
                 }
 
-                addressesSpan[index] = baseAddress + shader.Offset;
+                // Switch 2 (Ampere) pipelines carry a full program address instead of an offset into the
+                // program region.
+                addressesSpan[index] = _context.Nx2Ampere
+                    ? ((ulong)(shader.Unknown0x14 & 0xff) << 32) | shader.Unknown0x18
+                    : baseAddress + shader.Offset;
             }
 
             int samplerPoolMaximumId = _state.State.SamplerIndex == SamplerIndex.ViaHeaderIndex
                 ? _state.State.TexturePoolState.MaximumId
                 : _state.State.SamplerPoolState.MaximumId;
 
-            CachedShaderProgram gs = shaderCache.GetGraphicsShader(
-                ref _state.State,
-                ref _pipeline,
-                _channel,
-                samplerPoolMaximumId,
-                ref _currentSpecState.GetPoolState(),
-                ref _currentSpecState.GetGraphicsState(),
-                addresses);
+            CachedShaderProgram gs;
+
+            if (_context.Nx2Ampere)
+            {
+                Shader.Nx2.Nx2MeshDraw nx2Mesh = Nx2GetMeshDraw(addressesSpan);
+
+                gs = Nx2GetGraphicsShader(shaderCache, samplerPoolMaximumId, addresses, nx2Mesh);
+            }
+            else
+            {
+                gs = shaderCache.GetGraphicsShader(
+                    ref _state.State,
+                    ref _pipeline,
+                    _channel,
+                    samplerPoolMaximumId,
+                    ref _currentSpecState.GetPoolState(),
+                    ref _currentSpecState.GetGraphicsState(),
+                    addresses);
+            }
 
             // Consume the modified flag for spec state so that it isn't checked again.
             _currentSpecState.SetShader(gs);
@@ -1478,6 +1669,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
             byte oldVsClipDistancesWritten = _vsClipDistancesWritten;
 
+            _drawState.Nx2MeshDraw = gs.Nx2IsMesh;
             _drawState.VsUsesInstanceId = gs.Shaders[1]?.Info.UsesInstanceId ?? false;
             _vsUsesDrawParameters = gs.Shaders[1]?.Info.UsesDrawParameters ?? false;
             _vsClipDistancesWritten = gs.Shaders[1]?.Info.ClipDistancesWritten ?? 0;
@@ -1584,7 +1776,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             return new GpuChannelPoolState(
                 _state.State.TexturePoolState.Address.Pack(),
                 _state.State.TexturePoolState.MaximumId,
-                (int)_state.State.TextureBufferIndex);
+                TextureBufferIndex);
         }
 
         /// <summary>

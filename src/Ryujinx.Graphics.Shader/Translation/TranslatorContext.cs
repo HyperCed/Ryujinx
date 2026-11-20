@@ -281,6 +281,16 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                 if (cfg.Blocks.Length != 0)
                 {
+                    if (GpuAccessor.QueryNx2NativeProgram())
+                    {
+                        Definitions.BoundLoops = true;
+                    }
+
+                    if (i == 0 && GpuAccessor.QueryNx2NativeProgram())
+                    {
+                        Nx2BlitConstants.RunPass(cfg.Blocks, Definitions.Stage);
+                    }
+
                     RegisterUsage.FixupCalls(cfg.Blocks, frus);
 
                     Dominance.FindDominators(cfg);
@@ -453,6 +463,41 @@ namespace Ryujinx.Graphics.Shader.Translation
                 resourceManager.SetVertexAsComputeLocalMemories(Definitions.Stage, Definitions.InputTopology);
             }
 
+            if (Definitions.Nx2Mesh?.ComputeFallback == true)
+            {
+                StructureType meshFallbackBufferStruct = new(new StructureField[]
+                {
+                    new(AggregateType.Array | AggregateType.U32, "data", 0)
+                });
+
+                ResourceReservations reservations = resourceManager.Reservations;
+
+                resourceManager.Properties.AddOrUpdateStorageBuffer(new BufferDefinition(
+                    BufferLayout.Std430,
+                    1,
+                    reservations.Nx2MeshOutputStorageBufferBinding,
+                    "mesh_emulation_output",
+                    meshFallbackBufferStruct));
+                resourceManager.Properties.AddOrUpdateStorageBuffer(new BufferDefinition(
+                    BufferLayout.Std430,
+                    1,
+                    reservations.Nx2MeshTaskPayloadStorageBufferBinding,
+                    "mesh_emulation_payload",
+                    meshFallbackBufferStruct));
+                resourceManager.Properties.AddOrUpdateStorageBuffer(new BufferDefinition(
+                    BufferLayout.Std430,
+                    1,
+                    reservations.Nx2MeshTaskOffsetsStorageBufferBinding,
+                    "mesh_emulation_offsets",
+                    meshFallbackBufferStruct));
+                resourceManager.Properties.AddOrUpdateStorageBuffer(new BufferDefinition(
+                    BufferLayout.Std430,
+                    1,
+                    reservations.Nx2MeshTaskArgsStorageBufferBinding,
+                    "mesh_emulation_args",
+                    meshFallbackBufferStruct));
+            }
+
             return resourceManager;
         }
 
@@ -460,6 +505,16 @@ namespace Ryujinx.Graphics.Shader.Translation
         {
             if (vertexAsCompute)
             {
+                Nx2MeshInfo mesh = Definitions.Nx2Mesh;
+
+                if (mesh?.ComputeFallback == true)
+                {
+                    return new ShaderDefinitions(ShaderStage.Compute, mesh.Threads, 1, 1)
+                    {
+                        Nx2Mesh = mesh,
+                    };
+                }
+
                 return new ShaderDefinitions(ShaderStage.Compute, 32, 32, 1);
             }
             else
@@ -477,7 +532,13 @@ namespace Ryujinx.Graphics.Shader.Translation
                 ioUsage = ioUsage.Combine(_vertexOutput);
             }
 
-            return new ResourceReservations(GpuAccessor, IsTransformFeedbackEmulated, vertexAsCompute: true, _vertexOutput, ioUsage);
+            return new ResourceReservations(
+                GpuAccessor,
+                IsTransformFeedbackEmulated,
+                vertexAsCompute: true,
+                nx2MeshAsCompute: Definitions.Nx2Mesh?.ComputeFallback == true,
+                _vertexOutput,
+                ioUsage);
         }
 
         public void SetVertexOutputMapForGeometryAsCompute(TranslatorContext vertexContext)

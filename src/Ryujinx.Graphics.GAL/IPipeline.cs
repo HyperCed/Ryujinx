@@ -26,8 +26,17 @@ namespace Ryujinx.Graphics.GAL
         void CopyBuffer(BufferHandle source, BufferHandle destination, int srcOffset, int dstOffset, int size);
 
         void DispatchCompute(int groupsX, int groupsY, int groupsZ);
+        void DispatchComputeIndirect(BufferRange indirectBuffer);
 
         void Draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance);
+
+        /// <summary>
+        /// Draws with the bound task/mesh program (VK_EXT_mesh_shader): launches that many task workgroups,
+        /// or mesh workgroups without a task program.
+        /// </summary>
+        void DrawMeshTasks(int groupCountX, int groupCountY, int groupCountZ)
+        {
+        }
         void DrawIndexed(
             int indexCount,
             int instanceCount,

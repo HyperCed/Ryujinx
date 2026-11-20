@@ -13,7 +13,9 @@ namespace Ryujinx.Graphics.Gpu.Shader
         private const ResourceStages SupportBufferStages =
             ResourceStages.Compute |
             ResourceStages.Vertex |
-            ResourceStages.Fragment;
+            ResourceStages.Fragment |
+            ResourceStages.Task |
+            ResourceStages.Mesh;
 
         private const ResourceStages VtgStages =
             ResourceStages.Vertex |
@@ -39,7 +41,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// <param name="context">GPU context that owns the shaders that will be added to the builder</param>
         /// <param name="tfEnabled">Indicates if the graphics shader is used with transform feedback enabled</param>
         /// <param name="vertexAsCompute">Indicates that the vertex shader will be emulated on a compute shader</param>
-        public ShaderInfoBuilder(GpuContext context, bool tfEnabled, bool vertexAsCompute = false)
+        public ShaderInfoBuilder(GpuContext context, bool tfEnabled, bool vertexAsCompute = false, bool nx2MeshAsCompute = false)
         {
             _context = context;
 
@@ -67,7 +69,7 @@ namespace Ryujinx.Graphics.Gpu.Shader
             AddDescriptor(SupportBufferStages, ResourceType.UniformBuffer, uniformSetIndex, 0, 1);
             AddUsage(SupportBufferStages, ResourceType.UniformBuffer, uniformSetIndex, 0, 1);
 
-            ResourceReservationCounts rrc = new(!context.Capabilities.SupportsTransformFeedback && tfEnabled, vertexAsCompute);
+            ResourceReservationCounts rrc = new(!context.Capabilities.SupportsTransformFeedback && tfEnabled, vertexAsCompute, nx2MeshAsCompute);
 
             _reservedConstantBuffers = rrc.ReservedConstantBuffers;
             _reservedStorageBuffers = rrc.ReservedStorageBuffers;
@@ -75,7 +77,9 @@ namespace Ryujinx.Graphics.Gpu.Shader
             _reservedImages = rrc.ReservedImages;
 
             // TODO: Handle that better? Maybe we should only set the binding that are really needed on each shader.
-            ResourceStages stages = vertexAsCompute ? ResourceStages.Compute | ResourceStages.Vertex : VtgStages;
+            ResourceStages stages = vertexAsCompute || nx2MeshAsCompute
+                ? ResourceStages.Compute | ResourceStages.Vertex
+                : VtgStages;
 
             PopulateDescriptorAndUsages(stages, ResourceType.UniformBuffer, uniformSetIndex, 1, rrc.ReservedConstantBuffers - 1);
             PopulateDescriptorAndUsages(stages, ResourceType.StorageBuffer, storageSetIndex, 0, rrc.ReservedStorageBuffers, true);
@@ -103,14 +107,15 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// </summary>
         /// <param name="info">Shader stage information</param>
         /// <param name="vertexAsCompute">True if the shader stage has been converted into a compute shader</param>
-        public void AddStageInfo(ShaderProgramInfo info, bool vertexAsCompute = false)
+        /// <param name="slotIndex">Graphics slot of a Switch 2 task/mesh program (0 vertex, 2 tessellation evaluation), or -1</param>
+        public void AddStageInfo(ShaderProgramInfo info, bool vertexAsCompute = false, int slotIndex = -1)
         {
             if (info.Stage == ShaderStage.Fragment)
             {
                 _fragmentOutputMap = info.FragmentOutputMap;
             }
 
-            int stageIndex = GpuAccessorBase.GetStageIndex(info.Stage switch
+            int stageIndex = GpuAccessorBase.GetStageIndex(slotIndex >= 0 ? slotIndex : info.Stage switch
             {
                 ShaderStage.TessellationControl => 1,
                 ShaderStage.TessellationEvaluation => 2,
@@ -127,6 +132,8 @@ namespace Ryujinx.Graphics.Gpu.Shader
                 ShaderStage.TessellationEvaluation => ResourceStages.TessellationEvaluation,
                 ShaderStage.Geometry => ResourceStages.Geometry,
                 ShaderStage.Fragment => ResourceStages.Fragment,
+                ShaderStage.Task => ResourceStages.Task,
+                ShaderStage.Mesh => ResourceStages.Mesh,
                 _ => ResourceStages.None,
             };
 

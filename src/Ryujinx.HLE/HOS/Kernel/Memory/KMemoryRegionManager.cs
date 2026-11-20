@@ -13,12 +13,18 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
 
         private readonly ushort[] _pageReferenceCounts;
 
+        // Pages released after use (one bit each): fresh pages of the host memory block are still zero, so
+        // zero-filling them can be skipped, which keeps the host from committing memory the guest maps but
+        // never touches (a Switch 2 title's heap is gigabytes).
+        private readonly ulong[] _dirtyPages;
+
         public KMemoryRegionManager(ulong address, ulong size, ulong endAddr)
         {
             Address = address;
             Size = size;
 
             _pageReferenceCounts = new ushort[size / KPageTableBase.PageSize];
+            _dirtyPages = new ulong[(size / KPageTableBase.PageSize + 63) / 64];
 
             _pageHeap = new KPageHeap(address, size);
             _pageHeap.Free(address, size / KPageTableBase.PageSize);
@@ -144,6 +150,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
         {
             lock (_pageHeap)
             {
+                MarkDirty(address, 1);
                 _pageHeap.Free(address, 1);
             }
         }
@@ -154,6 +161,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
             {
                 foreach (KPageNode pageNode in pageList)
                 {
+                    MarkDirty(pageNode.Address, pageNode.PagesCount);
                     _pageHeap.Free(pageNode.Address, pageNode.PagesCount);
                 }
             }
@@ -163,8 +171,62 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
         {
             lock (_pageHeap)
             {
+                MarkDirty(address, pagesCount);
                 _pageHeap.Free(address, pagesCount);
             }
+        }
+
+        private void MarkDirty(ulong address, ulong pagesCount)
+        {
+            ulong index = GetPageOffset(address);
+
+            for (ulong i = index; i < index + pagesCount; i++)
+            {
+                _dirtyPages[i / 64] |= 1UL << (int)(i % 64);
+            }
+        }
+
+        /// <summary>
+        /// Calls <paramref name="fill"/> for the runs of pages in the range that were used before (released
+        /// since the region was created), and counts them as clean again. Pages never used are still zero.
+        /// </summary>
+        /// <returns>Number of pages that needed no fill</returns>
+        public ulong ForEachDirtyRange(ulong address, ulong pagesCount, System.Action<ulong, ulong> fill)
+        {
+            ulong clean = 0;
+
+            lock (_pageHeap)
+            {
+                ulong index = GetPageOffset(address);
+                ulong end = index + pagesCount;
+
+                while (index < end)
+                {
+                    bool dirty = (_dirtyPages[index / 64] & (1UL << (int)(index % 64))) != 0;
+                    ulong runStart = index;
+
+                    while (index < end && ((_dirtyPages[index / 64] & (1UL << (int)(index % 64))) != 0) == dirty)
+                    {
+                        if (dirty)
+                        {
+                            _dirtyPages[index / 64] &= ~(1UL << (int)(index % 64));
+                        }
+
+                        index++;
+                    }
+
+                    if (dirty)
+                    {
+                        fill(Address + runStart * KPageTableBase.PageSize, index - runStart);
+                    }
+                    else
+                    {
+                        clean += index - runStart;
+                    }
+                }
+            }
+
+            return clean;
         }
 
         public ulong GetFreePages()

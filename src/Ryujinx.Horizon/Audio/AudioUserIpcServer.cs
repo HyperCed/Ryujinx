@@ -40,6 +40,11 @@ namespace Ryujinx.Horizon.Audio
             _serverManager.RegisterObjectForServer(audioInManager, ServiceName.Encode("audin:u"), MaxSessionsCount);
             _serverManager.RegisterObjectForServer(finalOutputRecorderManager, ServiceName.Encode("audrec:u"), MaxSessionsCount);
             _serverManager.RegisterObjectForServer(audioSnoopManager, ServiceName.Encode("auddev"), MaxSessionsCount);
+
+            // Switch 2 audio entry point.
+            Nx2AudioUserClient nx2AudioUserClient = new(audioInManager, audioOutManager, audioRendererManager);
+
+            _serverManager.RegisterObjectForServer(nx2AudioUserClient, ServiceName.Encode("aud:u"), MaxSessionsCount);
         }
 
         public void ServiceRequests()

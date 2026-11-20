@@ -888,6 +888,11 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                         texture = new Texture(_context, _physicalMemory, info, sizeInfo, range.Value, scaleMode);
 
+                if (GpuContext.Nx2AllocationTrace && size >= 32UL << 20)
+                {
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 large texture 0x{info.GpuAddress:X} +{size >> 20} MiB: {info.Target} {info.Width}x{info.Height}x{info.DepthOrLayers} levels {info.Levels} {info.FormatInfo.Format}");
+                }
+
                         // If the new texture is larger than the existing one, we need to fill the remaining space with CPU data,
                         // otherwise we only need the data that is copied from the existing texture, without loading the CPU data.
                         bool updateNewTexture = texture.Width > overlap.Width || texture.Height > overlap.Height;
@@ -936,6 +941,11 @@ namespace Ryujinx.Graphics.Gpu.Image
             if (texture == null)
             {
                 texture = new Texture(_context, _physicalMemory, info, sizeInfo, range.Value, scaleMode);
+
+                if (GpuContext.Nx2AllocationTrace && size >= 32UL << 20)
+                {
+                    Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 large texture 0x{info.GpuAddress:X} +{size >> 20} MiB: {info.Target} {info.Width}x{info.Height}x{info.DepthOrLayers} levels {info.Levels} {info.FormatInfo.Format}");
+                }
 
                 // Step 1: Find textures that are view compatible with the new texture.
                 // Any textures that are incompatible will contain garbage data, so they should be removed where possible.
@@ -1062,6 +1072,13 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                 // We need to synchronize before copying the old view data to the texture,
                 // otherwise the copied data would be overwritten by a future synchronization.
+                // A texture in Switch 2 GPU-only memory (render targets) starts from zero: loading it would
+                // commit memory nobody wrote (Lichii's UnwrittenSparse).
+                if (setData && _context.Nx2Ampere && _context.Nx2IsGpuOnly(info.GpuAddress, size))
+                {
+                    setData = false;
+                }
+
                 texture.InitializeData(false, setData && !ShouldDiscard(discard, texture, sizeHint));
 
                 texture.Group.InitializeOverlaps();

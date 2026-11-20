@@ -103,6 +103,99 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int Read(int offset) => _state.Read(offset);
 
+        // Registers a Maxwell instanced draw writes for each instance (Switch 2 forwarding keeps its deferred
+        // draw pending across them).
+        private static readonly HashSet<int> _nx2DrawRegisters = BuildDrawRegisters();
+
+        private static HashSet<int> BuildDrawRegisters()
+        {
+            HashSet<int> offsets = [];
+
+            void Add(string name, int words = 1)
+            {
+                int offset = (int)System.Runtime.InteropServices.Marshal.OffsetOf<ThreedClassState>(name);
+
+                for (int word = 0; word < words; word++)
+                {
+                    offsets.Add(offset + word * 4);
+                }
+            }
+
+            Add(nameof(ThreedClassState.DrawBegin));
+            Add(nameof(ThreedClassState.DrawEnd));
+            Add(nameof(ThreedClassState.IndexBufferCount));
+            Add(nameof(ThreedClassState.VertexBufferDrawState), 2);
+            Add(nameof(ThreedClassState.FirstVertex));
+            Add(nameof(ThreedClassState.FirstInstance));
+            Add(nameof(ThreedClassState.DrawVertexArrayBeginEndInstanceFirst));
+            Add(nameof(ThreedClassState.DrawVertexArrayBeginEndInstanceSubsequent));
+            Add(nameof(ThreedClassState.DrawIndexBuffer32BeginEndInstanceFirst));
+            Add(nameof(ThreedClassState.DrawIndexBuffer16BeginEndInstanceFirst));
+            Add(nameof(ThreedClassState.DrawIndexBuffer8BeginEndInstanceFirst));
+            Add(nameof(ThreedClassState.DrawIndexBuffer32BeginEndInstanceSubsequent));
+            Add(nameof(ThreedClassState.DrawIndexBuffer16BeginEndInstanceSubsequent));
+            Add(nameof(ThreedClassState.DrawIndexBuffer8BeginEndInstanceSubsequent));
+            Add(nameof(ThreedClassState.VbElementU8));
+            Add(nameof(ThreedClassState.VbElementU16));
+            Add(nameof(ThreedClassState.VbElementU32));
+
+            // IndexBufferState.First.
+            offsets.Add((int)System.Runtime.InteropServices.Marshal.OffsetOf<ThreedClassState>(nameof(ThreedClassState.IndexBufferState)) + 0x14);
+
+            return offsets;
+        }
+
+        /// <summary>
+        /// Switch 2 forwarding: before a write that changes the 3D state, runs the deferred instanced draw, which
+        /// would otherwise run with the next draw's state (vertex buffers, shaders, render targets). On Maxwell,
+        /// the macro that issues the instances is followed by a flush; Switch 2 macros run elsewhere.
+        /// </summary>
+        internal void Nx2FlushDeferredDrawBeforeWrite(int offset, int value)
+        {
+            if (_drawManager.HasPendingInstancedDraw && !_nx2DrawRegisters.Contains(offset) && _state.Read(offset) != value)
+            {
+                _drawManager.PerformDeferredDraws(this);
+            }
+        }
+
+        /// <summary>
+        /// The vertex input state, for Switch 2 diagnostics (Nx2PassDumper).
+        /// </summary>
+        internal string Nx2DescribeVertexInput()
+        {
+            System.Text.StringBuilder text = new();
+            ref ThreedClassState state = ref _state.State;
+
+            for (int index = 0; index < 32; index++)
+            {
+                VertexAttribState attrib = state.VertexAttribState[index];
+
+                if (attrib.Attribute != 0)
+                {
+                    text.Append($" a{index}=b{attrib.UnpackBufferIndex()}+{attrib.UnpackOffset()} fmt 0x{attrib.UnpackFormat():x}{(attrib.UnpackIsConstant() ? " const" : "")};");
+                }
+            }
+
+            for (int index = 0; index < 16; index++)
+            {
+                VertexBufferState buffer = state.VertexBufferState[index];
+
+                if (buffer.UnpackEnable())
+                {
+                    ulong size = ((ulong)(state.Nx2VertexStreamSize[index * 2] & 0xff) << 32) | state.Nx2VertexStreamSize[index * 2 + 1];
+
+                    text.Append($" vb{index}=0x{buffer.Address.Pack():X} stride {buffer.UnpackStride()} size 0x{size:x} instanced {(bool)state.VertexBufferInstanced[index]} divisor {buffer.Divisor};");
+                }
+            }
+
+            text.Append($" first vertex {state.FirstVertex} first instance {state.FirstInstance}");
+
+            IndexBufferState ib = state.IndexBufferState;
+            text.Append($"; index buffer 0x{ib.Address.Pack():X} end 0x{ib.EndAddress.Pack():X} type {ib.Type} first {ib.First}");
+
+            return text.ToString();
+        }
+
         /// <summary>
         /// Writes data to the class registers.
         /// </summary>

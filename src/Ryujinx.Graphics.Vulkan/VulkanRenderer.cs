@@ -40,6 +40,11 @@ namespace Ryujinx.Graphics.Vulkan
         internal KhrSurface SurfaceApi { get; private set; }
         internal KhrSwapchain SwapchainApi { get; private set; }
         internal ExtConditionalRendering ConditionalRenderingApi { get; private set; }
+
+        /// <summary>
+        /// VK_EXT_mesh_shader, for Switch 2 task and mesh programs (null without it).
+        /// </summary>
+        internal ExtMeshShader MeshShaderApi { get; private set; }
         internal ExtExtendedDynamicState ExtendedDynamicStateApi { get; private set; }
         internal KhrPushDescriptor PushDescriptorApi { get; private set; }
         internal ExtTransformFeedback TransformFeedbackApi { get; private set; }
@@ -138,6 +143,11 @@ namespace Ryujinx.Graphics.Vulkan
         private unsafe void LoadFeatures(uint maxQueueCount, uint queueFamilyIndex)
         {
             FormatCapabilities = new FormatCapabilities(Api, _physicalDevice.PhysicalDevice);
+
+            if (Api.TryGetDeviceExtension(_instance.Instance, _device, out ExtMeshShader meshShaderApi))
+            {
+                MeshShaderApi = meshShaderApi;
+            }
 
             if (Api.TryGetDeviceExtension(_instance.Instance, _device, out ExtConditionalRendering conditionalRenderingApi))
             {
@@ -782,6 +792,7 @@ namespace Ryujinx.Graphics.Vulkan
                 supportsGeometryShaderPassthrough: Capabilities.SupportsGeometryShaderPassthrough,
                 supportsTransformFeedback: Capabilities.SupportsTransformFeedback,
                 supportsImageLoadFormatted: features2.Features.ShaderStorageImageReadWithoutFormat,
+                supportsImageStoreWithoutFormat: features2.Features.ShaderStorageImageWriteWithoutFormat,
                 supportsLayerVertexTessellation: featuresVk12.ShaderOutputLayer,
                 supportsMismatchingViewFormat: true,
                 supportsCubemapView: !IsAmdGcn,
@@ -802,6 +813,7 @@ namespace Ryujinx.Graphics.Vulkan
                 supportsViewportMask: Capabilities.SupportsViewportArray2,
                 supportsViewportSwizzle: false,
                 supportsIndirectParameters: true,
+                supportsMeshShaders: MeshShaderApi != null,
                 supportsDepthClipControl: Capabilities.SupportsDepthClipControl,
                 uniformBufferSetIndex: PipelineBase.UniformSetIndex,
                 storageBufferSetIndex: PipelineBase.StorageSetIndex,

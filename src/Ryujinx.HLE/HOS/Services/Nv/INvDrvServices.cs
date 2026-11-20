@@ -81,12 +81,22 @@ namespace Ryujinx.HLE.HOS.Services.Nv
         {
             fd = -1;
 
-            if (!_debugModeEnabled && _deviceFileDebugRegistry.Contains(path))
+            // Switch 2 lists the debug nodes with the other GPU nodes and its drivers open them.
+            bool nx2 = NvDrvServices.Nx2Driver.Active;
+
+            if (!_debugModeEnabled && !nx2 && _deviceFileDebugRegistry.Contains(path))
             {
                 return NvResult.NotSupported;
             }
 
-            if (_deviceFileRegistry.TryGetValue(path, out Type deviceFileClass))
+            if (!_deviceFileRegistry.TryGetValue(path, out Type deviceFileClass) && nx2 && path.StartsWith("/dev/nvhost-"))
+            {
+                Logger.Warning?.Print(LogClass.ServiceNv, $"Opening unknown device \"{path}\" as a Switch 2 stub");
+
+                deviceFileClass = typeof(NvDrvServices.Nx2StubDeviceFile);
+            }
+
+            if (deviceFileClass != null)
             {
                 ConstructorInfo constructor = deviceFileClass.GetConstructor([typeof(ServiceCtx), typeof(IVirtualMemoryManager), typeof(ulong)
                 ]);
@@ -283,6 +293,13 @@ namespace Ryujinx.HLE.HOS.Services.Nv
                     if (errorCode == NvResult.Success)
                     {
                         NvInternalResult internalResult = deviceFile.Ioctl(ioctlCommand, arguments);
+
+                        if (internalResult == NvInternalResult.NotImplemented && NvDrvServices.Nx2Driver.Active)
+                        {
+                            // Switch 2 NvRm uses ioctls Switch 1 never had: answer with a logged, input-echoing success.
+                            Logger.Warning?.Print(LogClass.ServiceNv, $"(STUBBED) Switch 2 {deviceFile.Path} ioctl type={ioctlCommand.Type:x} number={ioctlCommand.Number:x} size={ioctlCommand.Size:x}");
+                            internalResult = NvInternalResult.Success;
+                        }
 
                         if (internalResult == NvInternalResult.NotImplemented)
                         {
@@ -516,6 +533,13 @@ namespace Ryujinx.HLE.HOS.Services.Nv
                     {
                         NvInternalResult internalResult = deviceFile.Ioctl2(ioctlCommand, arguments, inlineInBufferSpan);
 
+                        if (internalResult == NvInternalResult.NotImplemented && NvDrvServices.Nx2Driver.Active)
+                        {
+                            // Switch 2 NvRm uses ioctls Switch 1 never had: answer with a logged, input-echoing success.
+                            Logger.Warning?.Print(LogClass.ServiceNv, $"(STUBBED) Switch 2 {deviceFile.Path} ioctl type={ioctlCommand.Type:x} number={ioctlCommand.Number:x} size={ioctlCommand.Size:x}");
+                            internalResult = NvInternalResult.Success;
+                        }
+
                         if (internalResult == NvInternalResult.NotImplemented)
                         {
                             throw new NvIoctlNotImplementedException(context, deviceFile, ioctlCommand);
@@ -569,6 +593,13 @@ namespace Ryujinx.HLE.HOS.Services.Nv
                     if (errorCode == NvResult.Success)
                     {
                         NvInternalResult internalResult = deviceFile.Ioctl3(ioctlCommand, arguments, inlineOutBufferSpan);
+
+                        if (internalResult == NvInternalResult.NotImplemented && NvDrvServices.Nx2Driver.Active)
+                        {
+                            // Switch 2 NvRm uses ioctls Switch 1 never had: answer with a logged, input-echoing success.
+                            Logger.Warning?.Print(LogClass.ServiceNv, $"(STUBBED) Switch 2 {deviceFile.Path} ioctl type={ioctlCommand.Type:x} number={ioctlCommand.Number:x} size={ioctlCommand.Size:x}");
+                            internalResult = NvInternalResult.Success;
+                        }
 
                         if (internalResult == NvInternalResult.NotImplemented)
                         {

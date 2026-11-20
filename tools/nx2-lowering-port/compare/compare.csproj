@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Compares the C# lowering with the C++ reference on dumped programs: dotnet run -c Release -- <dumps> <reference outputs> -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>CS0168;CS0219;CS0162;CS8321;CS0642</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Nx2Lowering.Main.cs" Condition="Exists('../Nx2Lowering.Main.cs')" />
+    <Compile Include="../../../src/Ryujinx.Graphics.Gpu/Shader/Nx2/Nx2Lowering.cs" Condition="!Exists('../Nx2Lowering.Main.cs')" />
+    <Compile Include="../../../src/Ryujinx.Graphics.Gpu/Shader/Nx2/Nx2LoweringSupport.cs" />
+    <Compile Include="../../../src/Ryujinx.Graphics.Gpu/Shader/Nx2/Nx2RegisterPressure.cs" />
+    <Compile Include="../../../src/Ryujinx.Graphics.Gpu/Shader/Nx2/Nx2GeometryExit.cs" />
+    <Compile Include="../../../src/Ryujinx.Graphics.Gpu/Shader/Nx2/Nx2ProgramCapture.cs" />
+  </ItemGroup>
+</Project>

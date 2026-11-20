@@ -378,6 +378,8 @@ namespace Ryujinx.Graphics.Vulkan
             return pipeline;
         }
 
+        private static readonly bool _pipelineTrace = System.Environment.GetEnvironmentVariable("RYUJINX_VK_PIPELINE_TRACE") == "1";
+
         public unsafe Auto<DisposablePipeline> CreateGraphicsPipeline(
             VulkanRenderer gd,
             Device device,
@@ -416,7 +418,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                 // Using patches topology without a tessellation shader is invalid.
                 // If we find such a case, return null pipeline to skip the draw.
-                if (Topology == PrimitiveTopology.PatchList && !HasTessellationControlShader)
+                if (Topology == PrimitiveTopology.PatchList && !HasTessellationControlShader && !program.IsMesh)
                 {
                     program.AddGraphicsPipeline(ref Internal, null);
 
@@ -441,6 +443,7 @@ namespace Ryujinx.Graphics.Vulkan
                 }
 
                 primitiveRestartEnable &= topologySupportsRestart;
+                primitiveRestartEnable |= isMoltenVk;
 
                 PipelineInputAssemblyStateCreateInfo inputAssemblyState = new()
                 {
@@ -588,7 +591,8 @@ namespace Ryujinx.Graphics.Vulkan
                 dynamicStates[5] = DynamicState.StencilReference;
                 dynamicStates[6] = DynamicState.BlendConstants;
 
-                if (supportsExtDynamicState && (gd.SupportsMTL31 || !gd.IsMoltenVk))
+                // Mesh pipelines have no vertex input.
+                if (supportsExtDynamicState && (gd.SupportsMTL31 || !gd.IsMoltenVk) && !program.IsMesh)
                 {
                     // Requires Metal 3.1 and new MoltenVK, however extended dynamic states extension is not
                     // available on older versions of MVK, so we can safely check only OS version.
@@ -630,9 +634,10 @@ namespace Ryujinx.Graphics.Vulkan
                     Flags = flags,
                     StageCount = StagesCount,
                     PStages = Stages.Pointer,
-                    PVertexInputState = &vertexInputState,
-                    PInputAssemblyState = &inputAssemblyState,
-                    PTessellationState = &tessellationState,
+                    // Mesh pipelines have no vertex input, input assembly or tessellation state.
+                    PVertexInputState = program.IsMesh ? null : &vertexInputState,
+                    PInputAssemblyState = program.IsMesh ? null : &inputAssemblyState,
+                    PTessellationState = program.IsMesh ? null : &tessellationState,
                     PViewportState = &viewportState,
                     PRasterizationState = &rasterizationState,
                     PMultisampleState = &multisampleState,
@@ -642,6 +647,24 @@ namespace Ryujinx.Graphics.Vulkan
                     Layout = PipelineLayout,
                     RenderPass = renderPass,
                 };
+
+                if (_pipelineTrace)
+                {
+                    System.Text.StringBuilder trace = new($"[vk-pipeline] program #{program.GetHashCode():x} compute {program.IsCompute} stage0 {Stages[0].Stage} stages {StagesCount} topology {Topology} patch points {PatchControlPoints} attributes {VertexAttributeDescriptionsCount} bindings {VertexBindingDescriptionsCount} colors {ColorBlendAttachmentStateCount}:");
+
+                    for (int i = 0; i < VertexAttributeDescriptionsCount; i++)
+                    {
+                        trace.Append($" a{Internal.VertexAttributeDescriptions[i].Location}={Internal.VertexAttributeDescriptions[i].Format}@{Internal.VertexAttributeDescriptions[i].Binding}+{Internal.VertexAttributeDescriptions[i].Offset}");
+                    }
+
+                    for (int i = 0; i < VertexBindingDescriptionsCount; i++)
+                    {
+                        trace.Append($" b{Internal.VertexBindingDescriptions[i].Binding}={Internal.VertexBindingDescriptions[i].Stride}/{Internal.VertexBindingDescriptions[i].InputRate}");
+                    }
+
+                    System.Console.Error.WriteLine(trace.ToString());
+                    System.Console.Error.Flush();
+                }
 
                 Result result = gd.Api.CreateGraphicsPipelines(device, cache, 1, &pipelineCreateInfo, null, &pipelineHandle);
 

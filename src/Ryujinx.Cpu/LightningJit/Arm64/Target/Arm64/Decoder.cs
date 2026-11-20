@@ -227,6 +227,58 @@ namespace Ryujinx.Cpu.LightningJit.Arm64.Target.Arm64
             return !block.EndsWithBranch;
         }
 
+        /// <summary>
+        /// Rewrites ARMv8.3 pointer authentication instructions into their unauthenticated equivalents.
+        /// Guest pointers are never signed: signing and authenticating are no-ops, and the authenticated
+        /// branches and returns (which Switch 2 code uses for almost every function) are plain ones.
+        /// Running them natively would sign with the host keys and registers instead.
+        /// </summary>
+        /// <param name="encoding">Instruction encoding</param>
+        /// <returns>Encoding of the equivalent instruction without pointer authentication</returns>
+        internal static uint RemovePointerAuthentication(uint encoding)
+        {
+            const uint Nop = 0xD503201F;
+
+            if ((encoding & 0xFFFFFBFF) == 0xD65F0BFF)
+            {
+                // RETAA, RETAB -> RET X30
+                return 0xD65F03C0;
+            }
+
+            if ((encoding & 0xFFFFF81F) == 0xD61F081F || (encoding & 0xFFFFF800) == 0xD71F0800)
+            {
+                // BRAAZ, BRABZ, BRAA, BRAB -> BR Xn
+                return 0xD61F0000 | (encoding & 0x3E0);
+            }
+
+            if ((encoding & 0xFFFFF81F) == 0xD63F081F || (encoding & 0xFFFFF800) == 0xD73F0800)
+            {
+                // BLRAAZ, BLRABZ, BLRAA, BLRAB -> BLR Xn
+                return 0xD63F0000 | (encoding & 0x3E0);
+            }
+
+            if ((encoding & 0xFFFF8000) == 0xDAC10000)
+            {
+                // PACIA, PACIB, PACDA, PACDB, AUTIA, AUTIB, AUTDA, AUTDB, their zero modifier forms,
+                // XPACI and XPACD.
+                return Nop;
+            }
+
+            if ((encoding & 0xFFFFF01F) == Nop)
+            {
+                // Hint space: XPACLRI, PACIA1716, PACIB1716, AUTIA1716, AUTIB1716, and the
+                // PACI[AB]Z, PACI[AB]SP, AUTI[AB]Z, AUTI[AB]SP group.
+                uint hint = (encoding >> 5) & 0x7F;
+
+                if (hint is 7 or 8 or 10 or 12 or 14 or (>= 24 and <= 31))
+                {
+                    return Nop;
+                }
+            }
+
+            return encoding;
+        }
+
         private static Block Decode(
             CpuPreset cpuPreset,
             IMemoryManager memoryManager,
@@ -252,7 +304,7 @@ namespace Ryujinx.Cpu.LightningJit.Arm64.Target.Arm64
 
             do
             {
-                encoding = memoryManager.Read<uint>(address);
+                encoding = RemovePointerAuthentication(memoryManager.Read<uint>(address));
                 address += 4UL;
 
                 (name, flags, AddressForm addressForm) = InstTable.GetInstNameAndFlags(encoding, cpuPreset.Version, cpuPreset.Features);

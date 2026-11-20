@@ -49,6 +49,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         public bool VsUsesInstanceId;
 
         /// <summary>
+        /// The bound program is a Switch 2 task/mesh program: draws launch that many task (or mesh) workgroups.
+        /// </summary>
+        public bool Nx2MeshDraw;
+
+        /// <summary>
         /// Indicates if any of the currently used vertex buffers is instanced.
         /// </summary>
         public bool IsAnyVbInstanced;

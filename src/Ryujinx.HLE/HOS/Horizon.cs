@@ -240,6 +240,10 @@ namespace Ryujinx.HLE.HOS
 
             HostSyncpoint = new NvHostSyncpt(device);
 
+            // Switch 2 driver state kept in statics belongs to one emulation session.
+            Services.Nv.NvDrvServices.Nx2Driver.Active = false;
+            Services.Nv.NvDrvServices.Nx2GpuMemoryRegistry.Reset();
+
             SurfaceFlinger = new SurfaceFlinger(device);
         }
 
