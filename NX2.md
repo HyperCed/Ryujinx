@@ -72,9 +72,10 @@ RYUJINX_NX2_MAXWELL=1 RYUJINX_NX2_COMPUTE=1 RYUJINX_GPU_HANG_ABORT=1 RYUJINX_GPU
 
 - Run only one Ryujinx at a time: they share the save directory.
 - Watch the memory. The game uses 8-11 GB; when a 16 GB Mac runs out, WindowServer can crash. The
-  wrapper stops the run when Ryujinx passes `MAX_FOOT_MB` (default 12500; `footprint` rounds to the GB above 10 GB) or the system's free memory
-  level drops under `MIN_FREE_PCT` (default 12%). It then prints `WATCHDOG: stopping Ryujinx: …`: that
-  is not a crash. Close other applications, or lower the limit with care (`MIN_FREE_PCT=8`).
+  wrapper stops the run when Ryujinx passes `MAX_FOOT_MB` (default 16384; `footprint` rounds to the GB above 10 GB) or the system's free memory
+  level drops under `MIN_FREE_PCT` (default 6%). It then prints `WATCHDOG: stopping Ryujinx: …`: that
+  is not a crash. Raise the limits (`MAX_FOOT_MB=20480 MIN_FREE_PCT=5`), give `0` seconds for no time
+  limit, or run with `NO_WATCHDOG=1` to keep only the memory log (`<log>.mem`), at your own risk.
 - Loading takes about 45 s before the GPU starts; the title screen appears about 15 s later.
 - The log mixes text and binary: use `grep -a`.
 
@@ -191,6 +192,20 @@ The 214 region creations are always logged (`nx2:gpu 214 … region`).
 | `--enable-debug-logs`, `--enable-trace-logs` | Service calls (TIPC, CMIF) in the log. |
 
 Host stacks of a stuck process: `dotnet-stack report -p <pid>` (`dotnet tool install -g dotnet-stack`).
+
+### Movies (video decoder)
+
+Movies (title screen, before each race) are VP9, decoded with FFmpeg (`brew install ffmpeg`). Ryujinx
+looks for libavcodec/libavutil next to itself, in `RYUJINX_NX2_FFMPEG_DIR`, then in Homebrew's lib
+directories. The log shows `nx2:vdec FFmpeg loaded from …` and `frame 1 (…)` once a movie starts.
+Without FFmpeg, movies play with no picture.
+
+| Option | Effect |
+| --- | --- |
+| `RYUJINX_NX2_VDEC_TRACE=1` | Every decoder call: submits, fences handed out, frames written, flush/stop/finalize. |
+| `RYUJINX_NX2_VDEC_NO_DECODE=1` | Blank frames, one per input: tells decoding problems from protocol problems. |
+| `RYUJINX_NX2_VDEC_EOS_DRAIN=0/1` | Force the end-of-stream drain of free images off/on (on by default for Mario Kart World only). |
+| `RYUJINX_NX2_FFMPEG_DIR=<dir>` | Where to load FFmpeg from. |
 
 ## 4. Where the code is
 

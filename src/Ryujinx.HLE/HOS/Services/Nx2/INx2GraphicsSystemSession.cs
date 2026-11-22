@@ -76,7 +76,7 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
 
             Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gsv {command}: returning a video decoder session");
 
-            return Nx2Tipc.ReturnSession(context, this, new INx2VideoSession(command == 1002 ? "nx2:vdec2" : "nx2:vdec"));
+            return Nx2Tipc.ReturnSession(context, this, new INx2VideoSession(command == 1002 ? "nx2:vdec2" : "nx2:vdec", _objects, () => _clientMemory));
         }
 
         [CommandTipc(991)]
@@ -90,20 +90,87 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
         public ResultCode CalculateDecoderImagePoolBuffer(ServiceCtx context)
         {
             uint[] w = Nx2Tipc.Words(context);
-            uint code = w[1];
-            ulong width = (w[2] & 0xffff) + 1;
-            ulong height = (w[2] >> 16) + 1;
-            uint count = System.Math.Max(w[16], 1);
-            bool nv12 = code is 1 or 4;
-            const ulong BlockRows = 128;
-
-            ulong pitch = Ryujinx.Common.BitUtils.AlignUp(width * (nv12 ? 1UL : 4UL), 64UL);
-            ulong chromaOffset = pitch * Ryujinx.Common.BitUtils.AlignUp(height, BlockRows);
-            ulong size = (chromaOffset + (nv12 ? pitch * Ryujinx.Common.BitUtils.AlignUp((height + 1) / 2, BlockRows) : 0)) * count;
+            uint count = Math.Max(w[16], 1);
+            Nx2DecoderImageLayout layout = new(w.AsSpan(0, 16));
+            ulong size = layout.Size * count;
             const ulong Alignment = 64 * 128;
 
-            Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gsv 991 decoder image pool code={code} {width}x{height} count={count} -> size=0x{size:x}");
+            Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gsv 991 decoder image pool code={layout.Code} {layout.Width}x{layout.Height} count={count} -> size=0x{size:x}");
             Nx2Tipc.Reply64(context, size, Alignment);
+
+            return ResultCode.Success;
+        }
+
+        [CommandTipc(911)]
+        // CreateDecoderImage(preference[16], u32 count, u32 memory id) (nn::codec::InitializeDecoderImagePool):
+        // the id of the first of `count` decoder output images; image i of the pool is id + i. They share the
+        // pool's memory, one image size apart.
+        public ResultCode CreateDecoderImage(ServiceCtx context)
+        {
+            uint[] w = Nx2Tipc.Words(context);
+            uint count = Math.Max(w[16], 1);
+            Nx2DecoderImageLayout layout = new(w.AsSpan(0, 16));
+            uint first;
+
+            lock (_objects.Lock)
+            {
+                first = _objects.NextImage;
+                _objects.NextImage += count;
+
+                for (uint i = 0; i < count; i++)
+                {
+                    Nx2NativeObjects.Image image = new()
+                    {
+                        MemoryId = w[17],
+                        Size = layout.Size,
+                        Offset = layout.Size * i,
+                        Decoder = true,
+                    };
+
+                    w.AsSpan(0, 16).CopyTo(image.Preference);
+                    _objects.Images[first + i] = image;
+                }
+            }
+
+            Logger.Info?.Print(LogClass.ServiceNv, $"nx2:gsv 911 decoder images {first}..{first + count - 1} code={layout.Code} {layout.Width}x{layout.Height} in memory {w[17]}");
+            Nx2Tipc.Reply(context, first);
+
+            return ResultCode.Success;
+        }
+
+        [CommandTipc(961)]
+        // GetCpuUserImageDescriptor(u32 image): the 128-byte descriptor nn::codec::ReadDecoderOutputImage*
+        // copy an image out with: u8 kind at +0 (8 RGBA, 9 BGRA, 10 NV12, pitch linear), the plane's offset
+        // into the pool memory (u32 +0x8) and pitch (u64 +0x10), NV12's chroma plane at +0x18/+0x20.
+        public ResultCode GetCpuImageDescriptor(ServiceCtx context)
+        {
+            uint id = Nx2Tipc.Words(context)[0];
+            uint[] words = new uint[32];
+
+            lock (_objects.Lock)
+            {
+                if (_objects.Images.TryGetValue(id, out Nx2NativeObjects.Image image) && image.Decoder)
+                {
+                    Nx2DecoderImageLayout layout = new(image.Preference);
+
+                    words[0] = layout.Nv12 ? 0xau : layout.Bgra ? 0x9u : 0x8u;
+                    words[2] = (uint)image.Offset;
+                    words[4] = (uint)layout.Pitch;
+
+                    if (layout.Nv12)
+                    {
+                        words[6] = (uint)(image.Offset + layout.ChromaOffset);
+                        words[8] = (uint)layout.Pitch;
+                    }
+                }
+            }
+
+            if (words[0] == 0)
+            {
+                Logger.Warning?.Print(LogClass.ServiceNv, $"nx2:gsv 961 unknown decoder image {id}");
+            }
+
+            Nx2Tipc.Reply(context, words);
 
             return ResultCode.Success;
         }
@@ -506,6 +573,7 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
 
         [CommandTipc(312)]
         [CommandTipc(430)]
+        [CommandTipc(912)] // DestroyDecoderImage
         [CommandTipc(612)]
         [CommandTipc(812)]
         [CommandTipc(1212)]

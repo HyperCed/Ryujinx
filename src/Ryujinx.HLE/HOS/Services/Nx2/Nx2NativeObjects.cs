@@ -21,6 +21,7 @@ namespace Ryujinx.HLE.HOS.Services.Nx2
             public uint Count = 1; // Images in the pool; handle id + i is image i
             public ulong Offset;
             public bool WindowPool;
+            public bool Decoder; // A video decoder output image (gsv 911), one image, no pool
         }
 
         public readonly object Lock = new();
