@@ -463,6 +463,38 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="gpuVa">Start GPU virtual address of the buffer</param>
         /// <param name="size">Size in bytes of the buffer</param>
         /// <returns>True if modified, false otherwise</returns>
+        /// <summary>
+        /// Switch 2: whether the GPU wrote part of a range that existing buffers cover and the data is still only
+        /// on the host. Unlike <see cref="CheckModified"/>, creates no buffer.
+        /// </summary>
+        internal bool Nx2IsGpuModified(MemoryManager memoryManager, ulong gpuVa, ulong size)
+        {
+            MultiRange range = memoryManager.GetPhysicalRegions(gpuVa, size);
+
+            for (int i = 0; i < range.Count; i++)
+            {
+                MemoryRange sub = range.GetSubRange(i);
+
+                if (sub.Address == MemoryManager.PteUnmapped)
+                {
+                    continue;
+                }
+
+                foreach (Buffer buffer in _buffers.FindOverlapsAsSpan(sub.Address, sub.Size))
+                {
+                    ulong start = Math.Max(sub.Address, buffer.Address);
+                    ulong end = Math.Min(sub.Address + sub.Size, buffer.EndAddress);
+
+                    if (end > start && buffer.IsModified(start, end - start))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         public bool CheckModified(MemoryManager memoryManager, ulong gpuVa, ulong size, out ulong outAddr)
         {
             if (_pruneCaches)

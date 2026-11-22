@@ -98,6 +98,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         private readonly ConcurrentQueue<CommandBuffer> _commandBufferQueue;
 
         private GPFifoProcessor _prevChannelProcessor;
+        private static int _nx2GpuWrittenEntries;
+        private readonly System.Collections.Generic.HashSet<ulong> _nx2GpuCommandAddresses = [];
+
+        // RYUJINX_NX2_NO_GPU_COMMAND_REREAD=1: GPU-written command buffers run from the copy taken at submission.
+        private static readonly bool _nx2NoGpuCommandReread = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_GPU_COMMAND_REREAD") == "1";
 
         private readonly bool _ibEnable;
         private readonly GpuContext _context;
@@ -197,7 +202,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                     // (its command rings are reused as soon as the submission is made), so the words are kept
                     // as submitted, also for entries that run after a suspension.
                     // RYUJINX_NX2_PB_REREAD=1 reads entries again after a suspension (RYUJINX_NX2_PB_COMPARE=1
-                    // logs when that differs); RYUJINX_NX2_PB_SNAPSHOT=0 always reads them when they run.
+                    // logs when that differs). Only with RYUJINX_NX2_PB_SNAPSHOT=1.
                     commandBuffer.SnapshotSuspensions = processor.Nx2Suspensions;
                     commandBuffer.Prefetch(processor.MemoryManager);
                 }
@@ -328,7 +333,10 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
         private static readonly bool _nx2Compare = Environment.GetEnvironmentVariable("RYUJINX_NX2_PB_COMPARE") == "1";
         private int _nx2CompareReports;
 
-        private static readonly bool _nx2Snapshot = Environment.GetEnvironmentVariable("RYUJINX_NX2_PB_SNAPSHOT") != "0";
+        // Off by default: Mario Kart World fills command buffers after submitting them (its tree draw counts,
+        // from what its culling compute wrote), before the semaphore release that gates them; the copy predates
+        // that and drew other models, elsewhere, or none. RYUJINX_NX2_PB_SNAPSHOT=1 copies at submission.
+        private static readonly bool _nx2Snapshot = Environment.GetEnvironmentVariable("RYUJINX_NX2_PB_SNAPSHOT") == "1";
 
         private static readonly System.IO.BinaryWriter _nx2Dump = Environment.GetEnvironmentVariable("RYUJINX_NX2_GPFIFO_DUMP") is { Length: > 0 } path
             ? new System.IO.BinaryWriter(System.IO.File.Create(path))
@@ -473,6 +481,22 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 entry.Words = null;
             }
 
+            if (entry.Words != null && entry.EntryAddress != ulong.MaxValue && entry.EntryCount != 0 && !_nx2NoGpuCommandReread &&
+                (_nx2GpuCommandAddresses.Contains(entry.EntryAddress) ||
+                 _context.Nx2IsComputeWritten(entry.EntryAddress, entry.EntryCount * 4UL) ||
+                 processor.MemoryManager.Physical.BufferCache.Nx2IsGpuModified(processor.MemoryManager, entry.EntryAddress, entry.EntryCount * 4UL)))
+            {
+                // Commands a compute program writes (Mario Kart World's tree draw counts): the copy taken at
+                // submission predates the program, so read them now. Their addresses come back every frame,
+                // also when the data already reached guest memory.
+                if (_nx2GpuCommandAddresses.Count < 4096)
+                {
+                    _nx2GpuCommandAddresses.Add(entry.EntryAddress);
+                }
+
+                entry.Words = null;
+            }
+
             if (entry.Words != null)
             {
                 words = entry.Words;
@@ -484,6 +508,18 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             else
             {
                 // Entries without a copy, or read again after a suspension (RYUJINX_NX2_PB_REREAD=1).
+                // Commands a compute program wrote (GPU-generated draw parameters) only reach guest memory
+                // through a flush, which waits for a host sync of the write: create one if there is none yet.
+                if (entry.EntryCount != 0 && processor.MemoryManager.Physical.BufferCache.Nx2IsGpuModified(processor.MemoryManager, entry.EntryAddress, entry.EntryCount * 4UL))
+                {
+                    _context.CreateHostSyncIfNeeded(Synchronization.HostSyncFlags.Strict | Synchronization.HostSyncFlags.Force);
+
+                    if (_nx2GpuWrittenEntries++ < 8)
+                    {
+                        Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"Switch 2 command buffer 0x{entry.EntryAddress:X} (+{entry.EntryCount} words) was written by the GPU: host sync before reading it");
+                    }
+                }
+
                 words = MemoryMarshal.Cast<byte, int>(processor.MemoryManager.GetSpan(entry.EntryAddress, (int)entry.EntryCount * 4, true));
 
                 if (snapshot != null && _nx2Compare && !words.SequenceEqual(snapshot) && _nx2CompareReports++ < 64)

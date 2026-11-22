@@ -266,6 +266,11 @@ namespace Ryujinx.Graphics.Gpu.Memory
 
             _cpStorageBuffers.SetBounds(index, range, flags);
 
+            if (_context.Nx2Ampere && flags.HasFlag(BufferUsageFlags.Write))
+            {
+                _context.Nx2NoteComputeWrite(gpuVa, size);
+            }
+
             if (_context.Nx2Ampere && Engine.Threed.DrawManager.Nx2InstanceTraceActive())
             {
                 Engine.Threed.DrawManager.Nx2InstanceTrace($"compute s{index}={gpuVa:x}+{size:x} {(flags.HasFlag(BufferUsageFlags.Write) ? "write" : "read")}");

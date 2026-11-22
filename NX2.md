@@ -191,7 +191,8 @@ The 214 region creations are always logged (`nx2:gpu 214 … region`).
 | `RYUJINX_NX2_TRACE_CB=1` | Logs the constant buffer selector writes. |
 | `RYUJINX_NX2_SEM_WATCH=<hex>` | Logs every semaphore operation on the 16 bytes at that GPU address. |
 | `RYUJINX_NX2_THREAD_DUMP=1` | At the first 4 s present timeout: guest thread stacks and pending waits. |
-| `RYUJINX_NX2_PB_REREAD=1` (+ `RYUJINX_NX2_PB_COMPARE=1`), `RYUJINX_NX2_PB_SNAPSHOT=0` | Command buffers are kept as submitted; these re-read them after a suspension (and log differences), or always read them when they run. |
+| `RYUJINX_NX2_PB_SNAPSHOT=1` (+ `RYUJINX_NX2_PB_REREAD=1`, `RYUJINX_NX2_PB_COMPARE=1`) | Command buffers are copied at submission instead of read when they run (then re-read after a suspension, and differences logged). The game fills some after submitting them (tree draw counts): with the copy, trees flicker or show other models. Under it, commands in memory a compute program wrote are still read when they run (`RYUJINX_NX2_NO_GPU_COMMAND_REREAD=1` off). |
+| `RYUJINX_NX2_NO_MME_SYNC=1` | Macro DMA reads of GPU-written memory no longer create a host sync first. |
 | `RYUJINX_NX2_PARK_SPLIT_METHODS=1` | Older handling of methods split across GPFIFO entries. |
 | `--enable-debug-logs`, `--enable-trace-logs` | Service calls (TIPC, CMIF) in the log. |
 

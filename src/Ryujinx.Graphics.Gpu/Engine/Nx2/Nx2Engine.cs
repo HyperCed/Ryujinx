@@ -35,6 +35,10 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
         private const uint ShadowScratch = 0xd00;
 
         private readonly GpuContext _context;
+
+        // RYUJINX_NX2_NO_MME_SYNC=1: macro DMA reads of GPU-written memory don't create a host sync first.
+        private static readonly bool _nx2NoMmeSync = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_MME_SYNC") == "1";
+        private static int _nx2MmeSyncs;
         private readonly GpuChannel _channel;
         private readonly string _name;
         private readonly bool _isCompute;
@@ -422,6 +426,21 @@ namespace Ryujinx.Graphics.Gpu.Engine.Nx2
                 uint ram = Registers[DataRamAddress];
                 uint count = System.Math.Min(value, 0x1000);
                 MemoryManager memory = _channel.MemoryManager;
+
+                // The macro reads what compute programs just wrote (draw counts, first instances): GPU-written
+                // buffer data only reaches guest memory through a flush, which waits for a host sync of the
+                // write. Without one (the write is in the commands not submitted yet) the flush returned the old
+                // data, and the macro drew last frame's counts: trees that flicker or stand elsewhere.
+                if (!_nx2NoMmeSync && count != 0 && memory.IsMapped(source) &&
+                    memory.Physical.BufferCache.Nx2IsGpuModified(memory, source, count * 4UL))
+                {
+                    _context.CreateHostSyncIfNeeded(Synchronization.HostSyncFlags.Strict | Synchronization.HostSyncFlags.Force);
+
+                    if (_nx2MmeSyncs++ < 8)
+                    {
+                        Logger.Info?.Print(LogClass.Gpu, $"Switch 2 macro DMA read of GPU-written 0x{source:X} (+0x{count * 4:x}): host sync before reading");
+                    }
+                }
 
                 for (uint i = 0; i < count; i++)
                 {
