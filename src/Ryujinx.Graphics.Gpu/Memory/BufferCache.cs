@@ -440,6 +440,23 @@ namespace Ryujinx.Graphics.Gpu.Memory
         }
 
         /// <summary>
+        /// Switch 2 diagnostics: makes the next synchronization of a range read it from guest memory, whatever
+        /// memory tracking saw.
+        /// </summary>
+        internal void Nx2ForceDirty(MultiRange range)
+        {
+            for (int i = 0; i < range.Count; i++)
+            {
+                MemoryRange sub = range.GetSubRange(i);
+
+                if (sub.Address != MemoryManager.PteUnmapped && sub.Size != 0)
+                {
+                    GetBuffer(sub.Address, sub.Size, BufferStage.Internal).ForceDirty(sub.Address, sub.Size);
+                }
+            }
+        }
+
+        /// <summary>
         /// Checks if the given buffer range has been GPU modifed.
         /// </summary>
         /// <param name="memoryManager">GPU memory manager where the buffer is mapped</param>

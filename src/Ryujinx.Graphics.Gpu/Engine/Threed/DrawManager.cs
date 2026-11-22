@@ -47,6 +47,65 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
 
         // First instance of the pending draw (Switch 2 draws of other meshes that go on with the instance ID).
         private int _nx2InstanceBase;
+        private int _nx2DrawInstanceBase;
+        private int _nx2PendingLastInstance; // Instance of the last draw that ended into the pending draw
+
+        // RYUJINX_NX2_REDRAW_CHAIN=1: a chain of subsequent instances flushed in the middle draws again from its
+        // first instance (the old behaviour, for comparison).
+        private static readonly bool _nx2RedrawChain = Environment.GetEnvironmentVariable("RYUJINX_NX2_REDRAW_CHAIN") == "1";
+
+        // RYUJINX_NX2_INSTANCE_TRACE=<file>: while that file exists, log instanced draws (up to 150000 lines).
+        private static readonly string _nx2InstanceTraceFile = Environment.GetEnvironmentVariable("RYUJINX_NX2_INSTANCE_TRACE");
+        private static int _nx2InstanceTraceLines;
+        internal static bool Nx2InstanceTraceArmed => _nx2InstanceTraceFile != null;
+        private static long _nx2InstanceTraceCheck;
+        private static bool _nx2InstanceTraceOn;
+
+        internal static bool Nx2InstanceTraceActive()
+        {
+            if (_nx2InstanceTraceFile == null || _nx2InstanceTraceLines >= 150000)
+            {
+                return false;
+            }
+
+            long now = Environment.TickCount64;
+
+            if (now - _nx2InstanceTraceCheck > 250)
+            {
+                _nx2InstanceTraceCheck = now;
+                _nx2InstanceTraceOn = System.IO.File.Exists(_nx2InstanceTraceFile);
+            }
+
+            return _nx2InstanceTraceOn;
+        }
+
+        internal static int Nx2ChannelTag(object channel) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(channel) % 1000;
+
+        internal static void Nx2InstanceTrace(string text)
+        {
+            _nx2InstanceTraceLines++;
+            Ryujinx.Common.Logging.Logger.Info?.Print(Ryujinx.Common.Logging.LogClass.Gpu, $"NX2I {text}");
+        }
+
+        private string Nx2DescribeInstancedBuffers()
+        {
+            System.Text.StringBuilder text = new();
+
+            for (int i = 0; i < 16; i++)
+            {
+                ref var vb = ref _state.State.VertexBufferState[i];
+
+                if (vb.UnpackEnable() && _state.State.VertexBufferInstanced[i])
+                {
+                    text.Append($" vb{i}={vb.Address.Pack():x}/s{vb.UnpackStride()}/d{vb.Divisor}");
+                }
+            }
+
+            return text.ToString();
+        }
+
+        // RYUJINX_NX2_NO_INSTANCE_BASE=1: split instanced draws restart their shader instance ID at 0.
+        private static readonly bool _nx2NoInstanceBase = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_INSTANCE_BASE") == "1";
 
         // RYUJINX_NX2_NO_INSTANCE_SPLIT=1: subsequent-instance draws are merged whatever they draw, as before.
         private static readonly bool _nx2NoInstanceSplit = Environment.GetEnvironmentVariable("RYUJINX_NX2_NO_INSTANCE_SPLIT") == "1";
@@ -148,6 +207,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 _state.State.RenderEnableAddress,
                 _state.State.RenderEnableCondition);
 
+            if (_context.Nx2Ampere && Nx2InstanceTraceActive() && (_drawState.VsUsesInstanceId || _drawState.IsAnyVbInstanced || _instanceIndex != 0))
+            {
+                Nx2InstanceTrace($"c{Nx2ChannelTag(_channel)} end [{GpuContext.Nx2LastProgram}] inst {_instanceIndex} base {_nx2InstanceBase} pending {_instancedDrawPending} idx {_drawState.DrawIndexed} ib {_state.State.IndexBufferState.Address.Pack():x} first {firstIndex} count {indexCount} fv {(int)_state.State.FirstVertex} vfirst {drawFirstVertex} vcount {drawVertexCount} fi {(int)_state.State.FirstInstance} usesId {_drawState.VsUsesInstanceId} render {renderEnable}{Nx2DescribeInstancedBuffers()}");
+            }
+
             if (_instancedDrawPending && _context.Nx2Ampere && !_nx2NoInstanceSplit && renderEnable != ConditionalRenderEnabled.False)
             {
                 // Switch 2 titles chain draws of other meshes as subsequent instances (the instance ID goes on):
@@ -177,6 +241,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 if (renderEnable == ConditionalRenderEnabled.False)
                 {
                     PerformDeferredDraws(engine);
+                }
+                else
+                {
+                    // One more instance of the pending draw.
+                    _nx2PendingLastInstance = _instanceIndex;
                 }
 
                 _drawState.DrawIndexed = false;
@@ -241,6 +310,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             if (instanced)
             {
                 _instancedDrawPending = true;
+                _nx2PendingLastInstance = _instanceIndex;
 
                 int ibCount = _drawState.IbStreamer.InlineIndexCount;
 
@@ -324,6 +394,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// <param name="primitiveType">Primitive type</param>
         private void DrawBegin(ThreedClass engine, bool incrementInstance, bool resetInstance, PrimitiveType primitiveType)
         {
+            if (_context.Nx2Ampere && Nx2InstanceTraceActive())
+            {
+                Nx2InstanceTrace($"c{Nx2ChannelTag(_channel)} begin {(incrementInstance ? "subsequent" : resetInstance ? "first" : "same")} inst {_instanceIndex} pending {_instancedDrawPending} base {_nx2InstanceBase}");
+            }
+
             if (incrementInstance)
             {
                 _instanceIndex++;
@@ -821,6 +896,12 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 _channel.BufferManager.SetInstancedDrawVertexCount(count);
             }
 
+            if (_context.Nx2Ampere)
+            {
+                _context.SupportBufferUpdater.SetNx2InstanceBase(_nx2NoInstanceBase ? 0 : _nx2DrawInstanceBase);
+                _context.SupportBufferUpdater.Commit();
+            }
+
             if (_drawState.VertexAsCompute != null)
             {
                 _vtgAsCompute.DrawAsCompute(
@@ -975,8 +1056,25 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             {
                 _instancedDrawPending = false;
 
-                int instanceCount = _instanceIndex + 1 - _nx2InstanceBase;
+                // Switch 2 flushes before constant buffer updates, which can come after the next draw's begin has
+                // counted its instance: draw up to the last instance whose draw ended.
+                int lastInstance = _context.Nx2Ampere ? _nx2PendingLastInstance : _instanceIndex;
+
+                if (_nx2InstanceBase > lastInstance)
+                {
+                    // Drawn again without a new instance after a flush: that one instance.
+                    _nx2InstanceBase = lastInstance;
+                }
+
+                int instanceCount = lastInstance + 1 - _nx2InstanceBase;
                 int firstInstance = _instancedFirstInstance + _nx2InstanceBase;
+
+                _nx2DrawInstanceBase = _nx2InstanceBase;
+
+                if (Nx2InstanceTraceActive())
+                {
+                    Nx2InstanceTrace($"c{Nx2ChannelTag(_channel)} draw [{GpuContext.Nx2LastProgram}]{_channel.BufferManager.Nx2DescribeGraphicsBuffers(0)} x{instanceCount} firstInstance {firstInstance} idBase {_nx2InstanceBase} idx {_instancedIndexed} first {_instancedFirstIndex} count {_instancedIndexCount} fv {_instancedFirstVertex} vfirst {_instancedDrawStateFirst} vcount {_instancedDrawStateCount}");
+                }
                 bool indexedInline = _instancedIndexedInline;
 
                 if (_instancedIndexed || indexedInline)
@@ -1003,6 +1101,16 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                     int firstVertex = _instancedDrawStateFirst;
 
                     DrawImpl(engine, vertexCount, instanceCount, 0, firstVertex, firstInstance, indexed: false);
+                }
+
+                _nx2DrawInstanceBase = 0;
+
+                // Switch 2 runs a pending draw before each constant buffer update, often in the middle of a chain
+                // of subsequent instances: the instances drawn so far must not be drawn again by the rest of the
+                // chain (they were, with the next mesh and constants: another model over each earlier one).
+                if (_context.Nx2Ampere && !_nx2RedrawChain)
+                {
+                    _nx2InstanceBase = lastInstance + 1;
                 }
             }
         }

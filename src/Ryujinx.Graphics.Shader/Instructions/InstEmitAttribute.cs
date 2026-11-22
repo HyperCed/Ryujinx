@@ -393,6 +393,17 @@ namespace Ryujinx.Graphics.Shader.Instructions
                     value = context.ISubtract(
                         context.Load(StorageKind.Input, IoVariable.InstanceIndex),
                         context.Load(StorageKind.Input, IoVariable.BaseInstance));
+
+                    // Switch 2 chains draws of other meshes as subsequent instances, whose instance ID goes on;
+                    // a split chain draws from the ID in the support buffer.
+                    if (context.TranslatorContext.GpuAccessor.QueryNx2NativeProgram())
+                    {
+                        value = context.IAdd(value, context.Load(
+                            StorageKind.ConstantBuffer,
+                            SupportBuffer.Binding,
+                            Const((int)SupportBufferField.Nx2InstanceBase)));
+                    }
+
                     return true;
                 }
                 else if (attr == AttributeConsts.VertexId)

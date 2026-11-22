@@ -507,6 +507,12 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 try
                 {
                     GpuContext.Nx2Phase = "deferred draws";
+
+                    if (Engine.Threed.DrawManager.Nx2InstanceTraceActive())
+                    {
+                        Engine.Threed.DrawManager.Nx2InstanceTrace($"c{Engine.Threed.DrawManager.Nx2ChannelTag(_channel)} entry end");
+                    }
+
                     _3dClass.PerformDeferredDraws();
                     GpuContext.Nx2Phase = "processing";
                 }
@@ -688,6 +694,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 // payloads) this way, so the word is written now, not batched like Maxwell's updates.
                 uint[] regs = _nx2Threed.Registers;
                 ulong address = ((ulong)regs[0x8e1] << 32 | regs[0x8e2]) + regs[0x8e3];
+
+                if (Engine.Threed.DrawManager.Nx2InstanceTraceActive())
+                {
+                    Engine.Threed.DrawManager.Nx2InstanceTrace($"c{Engine.Threed.DrawManager.Nx2ChannelTag(_channel)} cb {address:x} = {value:x}");
+                }
 
                 if (!_nx2NoEarlyDraws)
                 {

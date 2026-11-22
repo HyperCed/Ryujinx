@@ -87,7 +87,7 @@ RYUJINX_NX2_MAXWELL=1 RYUJINX_NX2_COMPUTE=1 RYUJINX_GPU_HANG_ABORT=1 RYUJINX_GPU
 | `RYUJINX_NX2_NO_SPARSE_TEXTURES` | off | `1`: virtual textures are no longer sparse host textures, but ordinary ones without their largest mip levels (see below). |
 | `RYUJINX_NX2_SPARSE_TEXTURE_MAX_MB` | 512 | Without sparse textures: largest host size of a virtual texture; the largest mip levels are dropped to fit. |
 | `RYUJINX_NX2_VB_MARGIN` | 0x10000 | Extra bytes added to vertex buffers (Metal faults on reads past the end). |
-| `RYUJINX_NX2_RELEASE_SYNC` | off | `1`: each semaphore release creates the host sync that makes GPU-written buffers readable by the CPU (as a syncpoint does). Experimental: the title screen then crashes after 25-60 s. |
+| `RYUJINX_NX2_RELEASE_SYNC` | on | `0`: semaphore releases no longer create the host sync that makes GPU-written buffers readable by the CPU (as a syncpoint does). Off, the CPU reads compute results stale: trees of other models, sizes and places. |
 | `RYUJINX_NX2_BACK_SPARSE` | on | `0`: sparse regions up to 512 MiB are left without backing memory. |
 | `RYUJINX_NX2_SPARSE_OVERRIDE` | off | `1`: the game's sparse mappings replace the backing of backed regions. |
 | `RYUJINX_NX2_NO_MESH`, `RYUJINX_NX2_NO_TESSELLATION` | off | `1`: skip mesh or tessellation draws. |
@@ -104,6 +104,8 @@ RYUJINX_NX2_MAXWELL=1 RYUJINX_NX2_COMPUTE=1 RYUJINX_GPU_HANG_ABORT=1 RYUJINX_GPU
 | `RYUJINX_NX2_HOST_LINEAR_COPIES` | off | `1`: 2D blits between linear surfaces stay host copies instead of going through guest memory. |
 | `RYUJINX_NX2_NO_EARLY_DRAWS` | off | `1`: a deferred instanced draw no longer runs before constant buffer updates, inline-to-memory, 2D and copy methods. |
 | `RYUJINX_NX2_NO_INSTANCE_SPLIT` | off | `1`: subsequent-instance draws are merged whatever they draw (different meshes or first instance), as on Maxwell. |
+| `RYUJINX_NX2_NO_INSTANCE_BASE` | off | `1`: a split chain of subsequent instances restarts its shader instance ID at 0 (the hardware goes on counting). |
+| `RYUJINX_NX2_REDRAW_CHAIN` | off | `1`: a chain of subsequent instances flushed in the middle (before a constant buffer update) draws again from its first instance. |
 
 ## 3. Debug
 
@@ -155,6 +157,8 @@ instruction, a scheduling word every 32 bytes).
 
 | Variable | Effect |
 |---|---|
+| `RYUJINX_NX2_INSTANCE_TRACE=<file>` | While `<file>` exists (`touch` it during a race, then delete it), logs instanced draw begins/ends, deferred draws with their program and vertex-stage buffers, constant buffer updates, command buffer ends and compute storage buffers (`NX2I` lines, up to 150000). |
+| `RYUJINX_NX2_SSBO_RESYNC=1` | Vertex shader storage buffers are read from guest memory once per sequence, whatever tracking saw (tells stale CPU data from GPU-written data: GPU-written data is lost). |
 | `RYUJINX_NX2_CB_WATCH=<program>:<stage>:<slot>:<word>` | Logs a constant buffer word of that program's draws when it becomes or stops being NaN (stage 4 = fragment). Finds when a value first goes bad. |
 | `RYUJINX_NX2_FLUSH_TRACE=1` | Logs host syncs, CPU reads of GPU-written buffers, and read-back data that contains NaN. |
 | `RYUJINX_NX2_SB_TRACE=1` | Logs storage buffer bindings: shader, read or written, address and size. Finds which shader writes a buffer. |

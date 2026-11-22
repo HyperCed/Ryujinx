@@ -105,6 +105,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
         private readonly BuffersPerStage[] _gpUniformBuffers;
 
         private bool _gpStorageBuffersDirty;
+        private readonly HashSet<(ulong, int)> _nx2Resynced = [];
+        private static readonly bool _nx2SsboResync = System.Environment.GetEnvironmentVariable("RYUJINX_NX2_SSBO_RESYNC") == "1";
         private bool _gpUniformBuffersDirty;
 
         private bool _indexBufferDirty;
@@ -263,6 +265,11 @@ namespace Ryujinx.Graphics.Gpu.Memory
             MultiRange range = _channel.MemoryManager.Physical.BufferCache.TranslateAndCreateMultiBuffers(_channel.MemoryManager, gpuVa, size, BufferStageUtils.ComputeStorage(flags));
 
             _cpStorageBuffers.SetBounds(index, range, flags);
+
+            if (_context.Nx2Ampere && Engine.Threed.DrawManager.Nx2InstanceTraceActive())
+            {
+                Engine.Threed.DrawManager.Nx2InstanceTrace($"compute s{index}={gpuVa:x}+{size:x} {(flags.HasFlag(BufferUsageFlags.Write) ? "write" : "read")}");
+            }
         }
 
         /// <summary>
@@ -396,6 +403,32 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// </summary>
         /// <param name="stage">Index of the shader stage</param>
         /// <returns>Mask where each bit set indicates a bound constant buffer</returns>
+        /// <summary>
+        /// Switch 2 diagnostics: the uniform and storage buffers bound to a graphics stage.
+        /// </summary>
+        internal string Nx2DescribeGraphicsBuffers(int stage)
+        {
+            System.Text.StringBuilder text = new();
+
+            void Add(string kind, BuffersPerStage buffers)
+            {
+                for (int i = 0; i < buffers.Buffers.Length; i++)
+                {
+                    MultiRange range = buffers.Buffers[i].Range;
+
+                    if (!range.IsUnmapped && range.GetSubRange(0).Size != 0)
+                    {
+                        text.Append($" {kind}{i}={range.GetSubRange(0).Address:x}+{range.GetSubRange(0).Size:x}");
+                    }
+                }
+            }
+
+            Add("u", _gpUniformBuffers[stage]);
+            Add("s", _gpStorageBuffers[stage]);
+
+            return text.ToString();
+        }
+
         public uint GetGraphicsUniformBufferUseMask(int stage)
         {
             uint mask = 0;
@@ -703,6 +736,27 @@ namespace Ryujinx.Graphics.Gpu.Memory
                     }
 
                     bufferCache.SynchronizeBufferRange(tfb.Range);
+                }
+            }
+
+            if (_nx2SsboResync && _context.Nx2Ampere)
+            {
+                if (_nx2Resynced.Count > 4096)
+                {
+                    _nx2Resynced.Clear();
+                }
+
+                // RYUJINX_NX2_SSBO_RESYNC=1: vertex shader storage buffers read from guest memory at every draw.
+                BuffersPerStage vertex = _gpStorageBuffers[0];
+
+                for (int index = 0; index < vertex.Count; index++)
+                {
+                    BufferBounds bounds = vertex.Buffers[vertex.Bindings[index].Slot];
+
+                    if (!bounds.IsUnmapped && _nx2Resynced.Add((bounds.Range.GetSubRange(0).Address, _context.SequenceNumber)))
+                    {
+                        bufferCache.Nx2ForceDirty(bounds.Range);
+                    }
                 }
             }
 

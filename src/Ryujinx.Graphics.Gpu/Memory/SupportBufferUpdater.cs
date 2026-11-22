@@ -218,6 +218,19 @@ namespace Ryujinx.Graphics.Gpu.Memory
         }
 
         /// <summary>
+        /// Sets the instance ID of a Switch 2 draw's first host instance.
+        /// </summary>
+        /// <param name="instanceBase">Instance ID of the first instance</param>
+        public void SetNx2InstanceBase(int instanceBase)
+        {
+            if (_data.Nx2InstanceBase.X != instanceBase)
+            {
+                _data.Nx2InstanceBase.X = instanceBase;
+                MarkDirty(SupportBuffer.Nx2InstanceBaseOffset, sizeof(int));
+            }
+        }
+
+        /// <summary>
         /// Submits all pending buffer updates to the GPU.
         /// </summary>
         public void Commit()
